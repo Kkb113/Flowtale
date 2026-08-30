@@ -78,6 +78,7 @@ import {
   deepcopy,
   getCurrentUtcUnixTime,
   getImgScreenData,
+  isLocalFullAccessEnabled,
   normalizeGlobalConfig,
 } from '@fable/common/dist/utils';
 import { Dispatch } from 'react';
@@ -1828,7 +1829,12 @@ export interface TFeaturePlan {
 export function getFeaturePlan(subs: RespSubscription) {
   return async (dispatch: Dispatch<TFeaturePlan>, getState: ()=> TState) => {
     let plan = PaymentTermsPlan.SOLO;
-    if (subs.paymentPlan !== PaymentTermsPlan.SOLO && (subs.status === Status.ACTIVE || subs.status === Status.IN_TRIAL)) {
+    if (isLocalFullAccessEnabled()) {
+      plan = PaymentTermsPlan.BUSINESS;
+    } else if (
+      subs.paymentPlan !== PaymentTermsPlan.SOLO
+      && (subs.status === Status.ACTIVE || subs.status === Status.IN_TRIAL)
+    ) {
       plan = subs.paymentPlan;
     }
 
