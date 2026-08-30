@@ -1,4 +1,9 @@
-import { IAnnotationConfig, ITourDataOpts } from '@fable/common/dist/types';
+import { IAnnotationButton, IAnnotationConfig, ITourDataOpts } from '@fable/common/dist/types';
+
+export interface FlowNavigationResult {
+  handled: boolean;
+  ctaButton?: IAnnotationButton;
+}
 
 export type AnnUpdate = {
     config: IAnnotationConfig,

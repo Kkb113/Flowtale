@@ -32,6 +32,7 @@ import { generateCSSSelectorFromText } from '../screen-editor/utils/css-styles';
 import AnnotationWatermark, { WatermarkText } from '../watermark/annotation-watermark';
 import { WatermarkCon } from '../watermark/styled';
 import { IAnnotationConfigWithScreenId, isAnnCustomPosition } from './annotation-config-utils';
+import { FlowNavigationResult } from './types';
 import FocusBubble from './focus-bubble';
 import * as VIDEO_ANN from './media-ann-constants';
 import * as Tags from './styled';
@@ -1411,7 +1412,11 @@ interface IConProps {
   playMode: boolean,
   tourId: number;
   applyDiffAndGoToAnn: ApplyDiffAndGoToAnn,
-  updateCurrentFlowMain: (btnType: IAnnotationButtonType, main?: string)=> void,
+  updateCurrentFlowMain: (
+    btnType: IAnnotationButtonType,
+    main?: string,
+    effectiveButton?: IAnnotationButton
+  )=> FlowNavigationResult | void,
   updateJourneyProgress: (annRefId: string)=>void,
   navigateToAnnByRefIdOnSameScreen: NavToAnnByRefIdFn,
   onCompMount: ()=>void,
@@ -1452,6 +1457,14 @@ function handleEventLogging(
       btnTxt: btn.text._val
     });
   }
+}
+
+export function getCtaButtonForNavigation(
+  btn: IAnnotationButton,
+  navigationResult?: FlowNavigationResult
+): IAnnotationButton | null {
+  if (!navigationResult?.handled) return btn;
+  return navigationResult.ctaButton || null;
 }
 
 export class AnnotationHotspot extends React.PureComponent<HotspotProps> {
@@ -1570,8 +1583,6 @@ export class AnnotationCon extends React.PureComponent<IConProps> {
           ? config.buttons.filter(button => button.id === btnId)[0]
           : config.buttons.filter(button => button.type === type)[0];
 
-        handleEventLogging(btnConf);
-
         let newBtnConf = btnConf;
         let annConfig = p.conf.config;
         const navType = btnConf.type;
@@ -1595,21 +1606,30 @@ export class AnnotationCon extends React.PureComponent<IConProps> {
         }
 
         if (!newBtnConf.hotspot) {
+          let navigationResult: FlowNavigationResult | void;
           if (this.props.playMode) {
-            this.props.updateCurrentFlowMain(newBtnConf.type);
+            navigationResult = this.props.updateCurrentFlowMain(
+              newBtnConf.type,
+              undefined,
+              newBtnConf
+            );
           }
+          const ctaButton = getCtaButtonForNavigation(newBtnConf, navigationResult || undefined);
+          if (ctaButton) handleEventLogging(ctaButton);
           return;
         }
+
+        handleEventLogging(newBtnConf);
 
         if (newBtnConf.hotspot && newBtnConf.hotspot.actionType === 'open') {
           if (newBtnConf.type === 'custom') {
             const nextBtn = getAnnotationBtn(annConfig, 'next');
             const isLastAnnotation = !nextBtn || nextBtn.hotspot === null || nextBtn.hotspot.actionType === 'open';
             if (isLastAnnotation) {
-              this.props.updateCurrentFlowMain(newBtnConf.type);
+              this.props.updateCurrentFlowMain(newBtnConf.type, undefined, newBtnConf);
             }
           } else {
-            this.props.updateCurrentFlowMain(newBtnConf.type);
+            this.props.updateCurrentFlowMain(newBtnConf.type, undefined, newBtnConf);
           }
         }
 

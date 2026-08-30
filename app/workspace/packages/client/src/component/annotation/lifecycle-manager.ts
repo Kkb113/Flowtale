@@ -1,12 +1,22 @@
 import ReactDOM, { Root } from 'react-dom/client';
-import { IAnnotationButtonType, IAnnotationConfig, ITourDataOpts } from '@fable/common/dist/types';
+import {
+  IAnnotationButton,
+  IAnnotationButtonType,
+  IAnnotationConfig,
+  ITourDataOpts
+} from '@fable/common/dist/types';
 import React from 'react';
 import { StyleSheetManager } from 'styled-components';
 import { ScreenType } from '@fable/common/dist/api-contract';
 import { sleep } from '@fable/common/dist/utils';
 import raiseDeferredError from '@fable/common/dist/deferred-error';
 import HighlighterBase, { HighlighterBaseConfig, Rect } from '../base/hightligher-base';
-import { IAnnoationDisplayConfig, AnnotationCon, AnnotationContent, IAnnProps } from '.';
+import {
+  IAnnoationDisplayConfig,
+  AnnotationCon,
+  AnnotationContent,
+  IAnnProps
+} from '.';
 import { AnnotationPerScreen, ElPathKey, INTERACTIVE_MODE, NavFn } from '../../types';
 import { isBodyEl, isMediaAnnotation } from '../../utils';
 import {
@@ -18,7 +28,7 @@ import {
 } from './utils';
 import { ApplyDiffAndGoToAnn, NavToAnnByRefIdFn } from '../screen-editor/types';
 import { AnnElsVisibilityObserver } from './ann-els-visibility-observer';
-import { AllDimsForAnnotation } from './types';
+import { AllDimsForAnnotation, FlowNavigationResult } from './types';
 import { FABLE_IFRAME_GENERIC_CLASSNAME } from '../../constants';
 import { P_RespScreen } from '../../entity-processor';
 import { IAnnotationConfigWithScreenId } from './annotation-config-utils';
@@ -71,7 +81,11 @@ export default class AnnotationLifecycleManager extends HighlighterBase {
 
   private undoLastAnnStyleOverride: Array<() => void> = [];
 
-  private updateCurrentFlowMain: (btnType: IAnnotationButtonType, main?:string)=> void;
+  private updateCurrentFlowMain: (
+    btnType: IAnnotationButtonType,
+    main?:string,
+    effectiveButton?: IAnnotationButton
+  )=> FlowNavigationResult | void;
 
   private annElsVisibilityObserver: AnnElsVisibilityObserver;
 
@@ -152,7 +166,11 @@ export default class AnnotationLifecycleManager extends HighlighterBase {
     tourId: number,
     config: HighlighterBaseConfig,
     applyDiffAndGoToAnnFn: ApplyDiffAndGoToAnn,
-    updateCurrentFlowMain: (btnType: IAnnotationButtonType, main?: string)=> void,
+    updateCurrentFlowMain: (
+      btnType: IAnnotationButtonType,
+      main?: string,
+      effectiveButton?: IAnnotationButton
+    )=> FlowNavigationResult | void,
     updateJourneyProgress: (annRefId: string) => void,
     elPathKey: ElPathKey,
     isScreenHTML4: boolean,

@@ -8,7 +8,9 @@ import raiseDeferredError from '@fable/common/dist/deferred-error';
 import { FrameSettings, Responsiveness, ScreenType } from '@fable/common/dist/api-contract';
 import { loadScreenAndData, loadTourAndData, removeScreenDataForRids, updateElPathKey } from '../../action/creator';
 import * as GTags from '../../common-styled';
-import PreviewWithEditsAndAnRO from '../../component/screen-editor/preview-with-edits-and-annotations-readonly';
+import PreviewWithEditsAndAnRO, {
+  MultiAnnotationBranchContext
+} from '../../component/screen-editor/preview-with-edits-and-annotations-readonly';
 import { P_RespScreen, P_RespTour } from '../../entity-processor';
 import { TState } from '../../reducer';
 import createAdjacencyList, { ScreenAdjacencyList, bfsTraverse, QueueNode } from '../../screen-adjacency-list';
@@ -302,6 +304,11 @@ class Player extends React.PureComponent<IProps, IOwnStateProps> {
   private playerRef: React.MutableRefObject<HTMLIFrameElement | null> = React.createRef();
 
   private mediaRef: React.MutableRefObject<AnnotationMedia | null> = React.createRef();
+
+  private readonly multiAnnotationBranchContext: MultiAnnotationBranchContext = {
+    originAnnotationRefId: null,
+    branchRootAnnotationRefId: null,
+  };
 
   constructor(props: IProps) {
     super(props);
@@ -1123,6 +1130,8 @@ class Player extends React.PureComponent<IProps, IOwnStateProps> {
   };
 
   replayDemo = (): void => {
+    this.multiAnnotationBranchContext.originAnnotationRefId = null;
+    this.multiAnnotationBranchContext.branchRootAnnotationRefId = null;
     this.goToMain();
     this.setState({
       previewReplayerKey: Math.random(),
@@ -1238,6 +1247,7 @@ class Player extends React.PureComponent<IProps, IOwnStateProps> {
                   }
                 }}
                 allAnnotationsForTour={this.props.allAnnotationsForTour}
+                multiAnnotationBranchContext={this.multiAnnotationBranchContext}
                 tour={this.props.tour!}
                 allScreensData={this.props.screenDataAcrossScreens}
                 allScreens={this.props.allScreens}
@@ -1252,31 +1262,36 @@ class Player extends React.PureComponent<IProps, IOwnStateProps> {
                   this.getScreenDataPreloaded(screen, this.props.tour!, 1, startScreens, false);
                 }}
                 updateCurrentFlowMain={(btnConfig: IAnnotationButtonType, main?: string) => {
-                  const currentMain = this.state.currentFlowMain;
-                  let newMain = currentMain;
                   if (main) {
-                    newMain = main;
-                  } else {
-                    const allFlows = this.props.journey!.flows.map(flow => flow.main) || [];
-                    const currentFlowMainIndex = allFlows.findIndex((flow) => flow === currentMain);
-                    if (btnConfig === 'next' && currentFlowMainIndex < allFlows.length - 1) {
-                      newMain = allFlows[currentFlowMainIndex + 1];
-                      this.navFn(newMain, 'annotation-hotspot');
-                    } else if (btnConfig === 'prev' && currentFlowMainIndex > 0) {
-                      newMain = allFlows[currentFlowMainIndex - 1];
-                      this.navFn(newMain, 'annotation-hotspot');
-                    }
-                    if ((btnConfig === 'next' || btnConfig === 'custom') && currentFlowMainIndex === this.props.journey!.flows.length - 1) {
-                      window.parent.postMessage({ type: 'lastAnnotation', demoRid: this.props.tour!.rid }, '*');
-                    }
+                    this.setCurrentFlowMain(main.split('/')[1]);
+                    return;
+                  }
+
+                  const allFlows = this.props.journey!.flows.map(flow => flow.main) || [];
+                  const currentFlowMainIndex = allFlows.findIndex(
+                    flow => flow === this.state.currentFlowMain
+                  );
+                  if (btnConfig === 'next' && currentFlowMainIndex < allFlows.length - 1) {
+                    this.navFn(allFlows[currentFlowMainIndex + 1], 'annotation-hotspot');
+                  } else if (btnConfig === 'prev' && currentFlowMainIndex > 0) {
+                    this.navFn(allFlows[currentFlowMainIndex - 1], 'annotation-hotspot');
+                  }
+                  if ((btnConfig === 'next' || btnConfig === 'custom')
+                    && currentFlowMainIndex === this.props.journey!.flows.length - 1
+                  ) {
+                    window.parent.postMessage({
+                      type: 'lastAnnotation',
+                      demoRid: this.props.tour!.rid
+                    }, '*');
                   }
                 }}
                 closeJourneyMenu={(): void => {
                   if (this.state.isJourneyMenuOpen) { this.setState({ isJourneyMenuOpen: false }); }
                 }}
                 updateJourneyProgress={(annRefId: string) => {
-                  if (this.state.currentFlowMain) {
-                    const currentStepNumber = this.state.annotationSerialIdMap[annRefId].idx;
+                  const annotationSerialId = this.state.annotationSerialIdMap[annRefId];
+                  if (this.state.currentFlowMain && annotationSerialId) {
+                    const currentStepNumber = annotationSerialId.idx;
                     this.updateJourneyProgress(currentStepNumber + 1);
                   }
                 }}
