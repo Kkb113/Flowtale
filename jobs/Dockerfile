@@ -1,23 +1,22 @@
-FROM node:18.16.1 AS base
+FROM node:22.23.2 AS base
 
 WORKDIR /usr/sqs_jobs
 
 COPY package*.json ./
-RUN npm install
+RUN npm ci
 COPY . .
 
-FROM base as builder
+FROM base AS builder
 WORKDIR /usr/sqs_jobs
 RUN npm run tscv
-RUN npm run gen
 RUN npm run build
 
-FROM node:18-alpine3.18
+FROM node:22.23.2-alpine3.23
 RUN apk add graphicsmagick
 WORKDIR /usr/sqs_jobs
 COPY package*.json ./
-RUN npm install --only=production
-COPY --from=builder /usr/sqs_jobs ./
+RUN npm ci --omit=dev
+COPY --from=builder /usr/sqs_jobs/dist ./dist
 
 EXPOSE 8081
-ENTRYPOINT ["yarn","start"]
+ENTRYPOINT ["npm","start"]

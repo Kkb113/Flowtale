@@ -14,7 +14,7 @@ gen:
 	cp -r src/http/llm-ops/contract/index.ts ../app/workspace/packages/common/src/llm-contract/index.ts
 
 run:
-	yarn build && yarn start | npx pino-pretty
+	npm run build && npm start | npx pino-pretty
 
 purge-queue:
 	aws sqs purge-queue \
@@ -26,12 +26,11 @@ test-run-job:
 		--message-body 'SUBS_UPGRADE_DOWNGRADE_SIDE_EFFECT' \
 		--message-attributes '{"orgIdStr": {"DataType": "String", "StringValue": "49"}, "beforePlan": {"DataType": "String", "StringValue": "SOLO"}, "afterPlan": {"DataType": "String", "StringValue": "BUSINESS"} }'
 
-***REMOVED*** --------------------------------------------------------------
-***REMOVED*** Different env file is required for different tool. Like idea
-***REMOVED*** needs env file in a different format which could be loaded via
-***REMOVED*** env plugin. This commands generate those file format.
-***REMOVED*** This is the first command that needs to be ran
-***REMOVED*** --------------------------------------------------------------
+# --------------------------------------------------------------
+# Different env files are required by different tools. IDEs need
+# a format that their environment plugins can load. This command
+# generates the appropriate file and should be run first.
+# --------------------------------------------------------------
 env:
 	@echo "Generating env file"
 
@@ -62,8 +61,8 @@ containerize:
 	aws ecr get-login-password --region $(AWS_REGION) | docker login --username AWS --password-stdin $(AWS_ORG).dkr.ecr.$(AWS_REGION).amazonaws.com
 	docker push $(ECR_IMAGE_TAG)
 
-***REMOVED*** README If you are running this in local make sure in env.dev file
-***REMOVED*** DB_CONN_URL=host.docker.internal is set otherwise the db won't be reachable via the docker network
+# When running locally, set DB_CONN_URL=host.docker.internal in env.dev
+# so the database is reachable from the Docker network.
 container-run: export SERVICE_NAME=`jq -r '.SERVICE_NAME' service.json`
 container-run:
 	@echo "Generating env file for this run"

@@ -39,6 +39,7 @@ export default function Header(props: Props): JSX.Element {
       >
         <a
           href={props.site.navLink._val || 'https://sharefable.com'}
+          aria-label={props.site.title || 'Open demo website'}
           style={{ display: 'flex', justifyContent: 'center', alignItems: 'center' }}
           target="_blank"
           rel="noreferrer"

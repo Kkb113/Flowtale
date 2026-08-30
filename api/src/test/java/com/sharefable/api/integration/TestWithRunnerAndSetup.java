@@ -6,12 +6,16 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.JavaType;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.amazonaws.services.sqs.AmazonSQS;
 import com.sharefable.Main;
 import com.sharefable.api.common.ApiResp;
+import com.sharefable.api.config.AppSettings;
+import com.sharefable.api.service.NfHookService;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.TestInstance;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.MediaType;
 import org.springframework.test.context.ActiveProfiles;
@@ -20,22 +24,41 @@ import org.springframework.test.web.servlet.MvcResult;
 import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
 import org.springframework.test.web.servlet.request.MockMvcRequestBuilders;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
+import org.springframework.security.oauth2.jwt.JwtDecoder;
 import org.springframework.web.context.WebApplicationContext;
 
 import java.io.IOException;
 import java.util.Map;
+
+import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.jwt;
+import static org.springframework.security.test.web.servlet.setup.SecurityMockMvcConfigurers.springSecurity;
 
 @SpringBootTest(classes = Main.class)
 @ActiveProfiles("test")
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
 public class TestWithRunnerAndSetup {
   protected MockMvc mvc;
+
+  @MockBean(name = "sqsClient")
+  AmazonSQS sqsClient;
+
+  @MockBean(name = "jwtDecoder")
+  JwtDecoder jwtDecoder;
+
+  @MockBean
+  NfHookService nfHookService;
+
+  @MockBean
+  AppSettings appSettings;
+
   @Autowired
   WebApplicationContext webApplicationContext;
 
   @BeforeAll
   public void setUp() {
-    mvc = MockMvcBuilders.webAppContextSetup(webApplicationContext).build();
+    mvc = MockMvcBuilders.webAppContextSetup(webApplicationContext)
+      .apply(springSecurity())
+      .build();
   }
 
   protected String mapToJson(Object obj) throws JsonProcessingException {
@@ -72,6 +95,15 @@ public class TestWithRunnerAndSetup {
       requestBuilder = MockMvcRequestBuilders.get(uri)
         .accept(MediaType.APPLICATION_JSON);
     }
+
+    requestBuilder.with(jwt().jwt(token -> token
+      .subject("test-user")
+      .claim("https://identity.sharefable.com/user", Map.of(
+        "email", "test@example.com",
+        "picture", "",
+        "givenName", "Test",
+        "familyName", "User"
+      ))));
 
     MvcResult mvcResult = mvc.perform(requestBuilder).andReturn();
     String content = mvcResult.getResponse().getContentAsString();

@@ -52,10 +52,7 @@
           2
         ],
         "prefer-template": "error",
-        "linebreak-style": [
-          "error",
-          "unix"
-        ],
+        "linebreak-style": "off",
         "quotes": [
           "error",
           "single"

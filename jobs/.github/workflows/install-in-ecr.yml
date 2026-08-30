@@ -71,4 +71,4 @@ jobs:
           make containerize v=${{ steps.version.outputs.V }}
 
       - run: |
-          echo "***REMOVED******REMOVED******REMOVED*** :warning: container img uploaded to ECR with v=${{steps.version.outputs.V}}. Please perform manual deployment in ECS." >> $GITHUB_STEP_SUMMARY
+          echo "### :warning: container img uploaded to ECR with v=${{steps.version.outputs.V}}. Please perform manual deployment in ECS." >> $GITHUB_STEP_SUMMARY

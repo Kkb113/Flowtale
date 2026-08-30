@@ -3,6 +3,7 @@ package com.sharefable;
 import jakarta.persistence.EntityManagerFactory;
 import org.hibernate.boot.model.naming.CamelCaseToUnderscoresNamingStrategy;
 import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.jdbc.DataSourceProperties;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.boot.orm.jpa.EntityManagerFactoryBuilder;
@@ -45,11 +46,13 @@ public class AnalyticsDataSourceConfig {
   @Bean(name = "analyticsEntityManagerFactory")
   public LocalContainerEntityManagerFactoryBean entityManagerFactory(
     EntityManagerFactoryBuilder builder,
-    @Qualifier("analyticsDatasource") DataSource dataSource) {
+    @Qualifier("analyticsDatasource") DataSource dataSource,
+    @Value("${spring.datasource.analytics.hibernate.ddl-auto:none}") String ddlAuto,
+    @Value("${spring.datasource.analytics.hibernate.dialect:org.hibernate.dialect.PostgreSQLDialect}") String dialect) {
     Map<String, String> jpaProps = new HashMap<>();
-    jpaProps.put("hibernate.dialect", "org.hibernate.dialect.PostgreSQLDialect");
+    jpaProps.put("hibernate.dialect", dialect);
     jpaProps.put("hibernate.jdbc.time_zone", "UTC");
-    jpaProps.put("hibernate.ddl-auto", "none");
+    jpaProps.put("hibernate.hbm2ddl.auto", ddlAuto);
     jpaProps.put("hibernate.physical_naming_strategy", CamelCaseToUnderscoresNamingStrategy.class.getName());
     jpaProps.put("hibernate.implicit_naming_strategy", SpringImplicitNamingStrategy.class.getName());
 

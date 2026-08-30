@@ -3,6 +3,7 @@ package com.sharefable;
 import jakarta.persistence.EntityManagerFactory;
 import org.hibernate.boot.model.naming.CamelCaseToUnderscoresNamingStrategy;
 import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.jdbc.DataSourceProperties;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.boot.orm.jpa.EntityManagerFactoryBuilder;
@@ -48,13 +49,15 @@ public class ApiDataSourceConfig {
   @Bean(name = "apiEntityManagerFactory")
   public LocalContainerEntityManagerFactoryBean entityManagerFactory(
     EntityManagerFactoryBuilder builder,
-    @Qualifier("apiDatasource") DataSource dataSource) {
+    @Qualifier("apiDatasource") DataSource dataSource,
+    @Value("${spring.datasource.api.hibernate.ddl-auto:none}") String ddlAuto,
+    @Value("${spring.datasource.api.hibernate.dialect:org.hibernate.dialect.MySQL8Dialect}") String dialect) {
     Map<String, String> jpaProps = new HashMap<>();
-    jpaProps.put("hibernate.dialect", "org.hibernate.dialect.MySQL8Dialect");
+    jpaProps.put("hibernate.dialect", dialect);
     jpaProps.put("hibernate.dialect.storage_engine", "innodb");
     jpaProps.put("hibernate.jdbc.time_zone", "UTC");
     jpaProps.put("hibernate.event.merge.entity_copy_observer", "allow");
-    jpaProps.put("hibernate.ddl-auto", "none");
+    jpaProps.put("hibernate.hbm2ddl.auto", ddlAuto);
     jpaProps.put("hibernate.physical_naming_strategy", CamelCaseToUnderscoresNamingStrategy.class.getName());
     jpaProps.put("hibernate.implicit_naming_strategy", SpringImplicitNamingStrategy.class.getName());
 

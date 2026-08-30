@@ -93,7 +93,11 @@ const formatProps = (text: string) => {
   };
 };
 
-const notifySlack = async (url: string, text: string) => {
+const notifySlack = async (url: string | undefined, text: string) => {
+  if (!url) {
+    log.warn('Slack webhook is not configured; notification skipped');
+    return;
+  }
   const resp = await fetch(url, {
     method: 'POST',
     headers: {

@@ -12,15 +12,6 @@ function getDocFor(filename: string) {
   });
 }
 
-function isContentEmpty(el: Text): boolean {
-  if (!el.textContent) {
-    return true;
-  }
-  let content = el.textContent;
-  content = content.replace(/[\s\n]+/g, "");
-  return content === "";
-}
-
 type Mismatch = {
   type: "attr" | "nodeName" | "text";
   name: string;
@@ -44,6 +35,9 @@ function match(el: ChildNode, node: SerNode): Mismatch[] {
 
     const attrs = tEl.getAttributeNames();
     const serAttrs = { ...node.attrs };
+    for (const generatedAttr of ["fable-stf", "fable-slf"]) {
+      delete serAttrs[generatedAttr];
+    }
     for (const attr of attrs) {
       const domAttrVal = tEl.getAttribute(attr);
       const serAttrVal = serAttrs[attr];
@@ -97,17 +91,21 @@ describe("DOM Serializtion", () => {
     expect(sFrame.name).toContain("");
 
     const sDoc = JSON.parse(sFrame.docTreeStr);
+    expect(sDoc.attrs["fable-stf"]).toBe("0");
+    expect(sDoc.attrs["fable-slf"]).toBe("0");
 
     (function checkForMismatch(domEl: ChildNode, serEl: SerNode) {
       const mismatched = match(domEl, serEl);
       expect(mismatched).toEqual([]);
 
-      for (let i = 0, ii = 0; i < domEl.childNodes.length; i++) {
-        const el = domEl.childNodes[i];
-        if (el.nodeType === Node.TEXT_NODE && isContentEmpty(el as Text)) {
-          continue;
-        }
-        checkForMismatch(domEl.childNodes[i], serEl.chldrn[ii++]);
+      if (domEl.nodeName === "STYLE") {
+        expect(serEl.props.cssRules).toContain(".hide");
+        return;
+      }
+
+      expect(serEl.chldrn).toHaveLength(domEl.childNodes.length);
+      for (let i = 0; i < domEl.childNodes.length; i++) {
+        checkForMismatch(domEl.childNodes[i], serEl.chldrn[i]);
       }
     }(document.documentElement, sDoc));
   });

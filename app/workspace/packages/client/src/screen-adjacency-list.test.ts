@@ -1,4 +1,5 @@
 import { IAnnotationConfig } from '@fable/common/dist/types';
+import { createLiteralProperty } from '@fable/common/dist/utils';
 import { P_RespScreen } from './entity-processor';
 import create from './screen-adjacency-list';
 
@@ -17,7 +18,7 @@ function getLinearConfigForAnnotationAndScreen(): [P_RespScreen[], Record<string
         hotspot: {
           actionType: 'navigate',
           type: 'next',
-          actionValue: '2/b2',
+          actionValue: createLiteralProperty('2/b2'),
         } }]
     },
     { refId: 'b1', buttons: [{ type: 'next', hotspot: null }] },
@@ -30,7 +31,7 @@ function getLinearConfigForAnnotationAndScreen(): [P_RespScreen[], Record<string
           hotspot: {
             actionType: 'navigate',
             type: 'next',
-            actionValue: '2/c2',
+            actionValue: createLiteralProperty('2/c2'),
           }
         }]
       },
@@ -40,7 +41,7 @@ function getLinearConfigForAnnotationAndScreen(): [P_RespScreen[], Record<string
           hotspot: {
             actionType: 'navigate',
             type: 'next',
-            actionValue: '3/a3',
+            actionValue: createLiteralProperty('3/a3'),
           }
         }]
       }
@@ -91,7 +92,7 @@ describe('screen-annotation-directed-graph', () => {
             hotspot: {
               actionType: 'navigate',
               type: 'next',
-              actionValue: '1/a1',
+              actionValue: createLiteralProperty('1/a1'),
             }
           }]
         }
@@ -120,26 +121,26 @@ describe('screen-annotation-directed-graph', () => {
           buttons: [
             {
               type: 'next',
-              hotspot: { actionType: 'navigate', actionValue: '3/b3' }
+              hotspot: { actionType: 'navigate', actionValue: createLiteralProperty('3/b3') }
             }, {
               type: 'prev',
-              hotspot: { actionType: 'navigate', actionValue: '2/b2' }
+              hotspot: { actionType: 'navigate', actionValue: createLiteralProperty('2/b2') }
             }]
         },
         {
           refId: 'b1',
           buttons: [{
             type: 'next',
-            hotspot: { actionType: 'navigate', actionValue: '2/b2' }
+            hotspot: { actionType: 'navigate', actionValue: createLiteralProperty('2/b2') }
           }, {
             type: 'prev',
-            hotspot: { actionType: 'navigate', actionValue: '2/c2' }
+            hotspot: { actionType: 'navigate', actionValue: createLiteralProperty('2/c2') }
           }],
         },
         { refId: 'c1',
           buttons: [{
             type: 'next',
-            hotspot: { actionType: 'navigate', actionValue: '1/a1' }
+            hotspot: { actionType: 'navigate', actionValue: createLiteralProperty('1/a1') }
           }],
         }
       ] as IAnnotationConfig[]),
@@ -149,14 +150,14 @@ describe('screen-annotation-directed-graph', () => {
           refId: 'b2',
           buttons: [{
             type: 'next',
-            hotspot: { actionType: 'navigate', actionValue: '1/c1' }
+            hotspot: { actionType: 'navigate', actionValue: createLiteralProperty('1/c1') }
           }]
         },
         {
           refId: 'c2',
           buttons: [{
             type: 'next',
-            hotspot: { actionType: 'navigate', actionValue: '1/b1' }
+            hotspot: { actionType: 'navigate', actionValue: createLiteralProperty('1/b1') }
           }]
         }
       ] as IAnnotationConfig[]),
@@ -165,10 +166,10 @@ describe('screen-annotation-directed-graph', () => {
         { refId: 'b3',
           buttons: [{
             type: 'next',
-            hotspot: { actionType: 'navigate', actionValue: '2/a2', }
+            hotspot: { actionType: 'navigate', actionValue: createLiteralProperty('2/a2'), }
           }, {
             type: 'prev',
-            hotspot: { actionType: 'navigate', actionValue: '1/a1', }
+            hotspot: { actionType: 'navigate', actionValue: createLiteralProperty('1/a1'), }
           }]
         }
       ] as IAnnotationConfig[]),

@@ -1,0 +1,124 @@
+name: Baseline CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: baseline-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  api:
+    name: API (Java 17)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: maven
+          cache-dependency-path: api/pom.xml
+
+      - name: Verify API
+        working-directory: api
+        run: bash ./mvnw --batch-mode --no-transfer-progress verify
+
+      - name: Verify generated API contract is committed
+        run: git diff --exit-code -- api/gen/api-contract.d.ts
+
+  frontend:
+    name: Frontend (Node 22)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    defaults:
+      run:
+        working-directory: app/workspace
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node 22.23.2
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.23.2
+
+      - name: Activate Yarn Classic
+        run: |
+          corepack enable
+          corepack prepare yarn@1.22.22 --activate
+
+      - name: Install dependencies
+        run: yarn install --frozen-lockfile
+
+      - name: Build shared package
+        run: yarn workspace @fable/common build
+
+      - name: Lint frontend packages
+        run: |
+          yarn workspace @fable/common lint
+          yarn workspace @fable/client lint
+          yarn workspace @fable/ext-tour lint
+
+      - name: Test shared package
+        run: yarn workspace @fable/common test --runInBand
+
+      - name: Test client
+        env:
+          CI: "true"
+        run: yarn workspace @fable/client test --watchAll=false --runInBand
+
+      - name: Test extension
+        run: yarn workspace @fable/ext-tour test --runInBand
+
+      - name: Build extension
+        run: yarn workspace @fable/ext-tour build-local
+
+      - name: Build client
+        env:
+          CI: "false"
+        run: yarn workspace @fable/client build-staging
+
+  jobs:
+    name: Jobs (Node 22)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    defaults:
+      run:
+        working-directory: jobs
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node 22.23.2
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.23.2
+          cache: npm
+          cache-dependency-path: jobs/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint jobs
+        run: npm run lint
+
+      - name: Test jobs
+        run: npm test -- --runInBand
+
+      - name: Build jobs
+        run: npm run build
+
+      - name: Build production container
+        run: docker build --tag flowtale-jobs:ci .
