@@ -73,7 +73,13 @@ import {
   IGlobalConfig,
   SerNode,
 } from '@fable/common/dist/types';
-import { createLiteralProperty, deepcopy, getCurrentUtcUnixTime, getImgScreenData } from '@fable/common/dist/utils';
+import {
+  createLiteralProperty,
+  deepcopy,
+  getCurrentUtcUnixTime,
+  getImgScreenData,
+  normalizeGlobalConfig,
+} from '@fable/common/dist/utils';
 import { Dispatch } from 'react';
 import { setUser } from '@sentry/react';
 import { sentryCaptureException } from '@fable/common/dist/sentry';
@@ -909,15 +915,20 @@ export function getAllTours(shouldRefreshIfPresent = true, fetchUpdatedTours = f
       let gOptsData = state.globalConfig;
       if (!gOptsData) {
         const respGOpts = await api<null, ApiResp<RespGlobalOpts>>('/gopts', { auth: true });
-        gOptsData = respGOpts.data.globalOpts;
+        gOptsData = normalizeGlobalConfig(respGOpts.data.globalOpts);
       }
 
-      const tours = data.data.map((d: RespDemoEntity) => processRawTourData(d, getState().default.commonConfig!, gOptsData!))
+      const globalConfig = normalizeGlobalConfig(gOptsData);
+      const tours = data.data.map((d: RespDemoEntity) => processRawTourData(
+        d,
+        getState().default.commonConfig!,
+        globalConfig
+      ))
         .filter(t => !t.inProgress);
       dispatch({
         type: ActionType.ALL_TOURS_LOADED,
         tours,
-        globalConfig: gOptsData!,
+        globalConfig,
       });
     }
   };
@@ -1576,11 +1587,11 @@ export function getGlobalConfig() {
   return async (dispatch: Dispatch<TSetGlobalConfig>, getState: () => TState) => {
     const state = getState();
 
-    if (state.default.globalConfig !== null) return;
+    if (state.default.globalConfig) return;
 
     const data = await api<null, ApiResp<RespGlobalOpts>>('/gopts', { auth: true });
 
-    const config: IGlobalConfig = data.data.globalOpts;
+    const config = normalizeGlobalConfig(data.data.globalOpts);
 
     dispatch({
       type: ActionType.SET_GLOBAL_CONFIG,

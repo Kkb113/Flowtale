@@ -68,6 +68,6 @@ docker build --tag flowtale-jobs:local .
 - Lint currently passes with an inherited warning backlog. New work should avoid increasing it; reducing it can be handled incrementally.
 - The jobs dependency graph still reports audit findings, including a critical issue inherited through the deprecated AWS Elastic Transcoder client. Replacing that service client is a separate behavior-changing migration and should not be hidden behind a forced lockfile override.
 - Some frontend test and build dependencies are old enough to emit peer-dependency, Browserslist, or deprecation warnings. They remain pinned to avoid coupling a broad framework upgrade to feature development.
-- Builds and automated tests are local and credential-free. Running the complete product still expects databases and several external integrations; making runtime providers fully local or configurable belongs to the next implementation phase.
+- The core HTML recording, creation, preview, editor, and analytics flow can use Docker-backed MySQL, PostgreSQL, and LocalStack S3/SQS. Authentication still uses the configured Auth0 tenant, and optional billing, AI, media, and integration features remain separate provider work.
 
 This baseline means clean installs, compilation, lint without errors, automated tests, deterministic generated contracts, and production artifact builds are reproducible. It does not claim that inherited technical debt is zero.

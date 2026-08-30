@@ -35,7 +35,7 @@ public class AppSettings {
   private int maxSSLCertPerClusterLimit;
   private List<CustomDomainProxyCluster> customDomainProxyClusters = new ArrayList<>();
   private Map<String, Object> featurePlanMatrix;
-  private Object globalOpts;
+  private Map<String, Object> globalOpts;
   @Setter
   private String publicEndpoint;
 
@@ -66,7 +66,7 @@ public class AppSettings {
 
     currentSchemaVersion = SchemaVersion.of(hm.get("CURRENT_SCHEMA_VERSION"));
     onboardingTourIds = hm.getOrDefault("ONBOARDING_TOUR_IDS", "");
-    globalOpts = hm.getOrDefault("DEFAULT_GLOBAL_OPTS", null);
+    globalOpts = parseGlobalOpts(hm.get("DEFAULT_GLOBAL_OPTS"));
 
     try {
       TypeReference<Map<String, Object>> typeRef = new TypeReference<>() {
@@ -102,6 +102,32 @@ public class AppSettings {
       featurePlanMatrix,
       globalOpts
     );
+  }
+
+  private Map<String, Object> parseGlobalOpts(String rawGlobalOpts) {
+    if (StringUtils.isBlank(rawGlobalOpts)) {
+      log.warn("DEFAULT_GLOBAL_OPTS is missing; using an empty configuration");
+      return new HashMap<>();
+    }
+
+    try {
+      Object parsed = mapper.readValue(rawGlobalOpts, Object.class);
+      // Older installations may have stored the JSON document as a JSON string.
+      if (parsed instanceof String nestedJson) {
+        parsed = mapper.readValue(nestedJson, Object.class);
+      }
+      if (parsed instanceof Map<?, ?>) {
+        return mapper.convertValue(parsed, new TypeReference<>() {
+        });
+      }
+    } catch (Exception e) {
+      log.error("DEFAULT_GLOBAL_OPTS is invalid; using an empty configuration. Error: {}", e.getMessage());
+      Sentry.captureException(e);
+      return new HashMap<>();
+    }
+
+    log.error("DEFAULT_GLOBAL_OPTS must contain a JSON object; using an empty configuration");
+    return new HashMap<>();
   }
 }
 

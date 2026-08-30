@@ -6,7 +6,7 @@
   "repository": "git+ssh://git@github.com:sharefable/app.git",
   "license": "Apache-2.0",
   "scripts": {
-    "clean": "rm -rf build",
+    "clean": "node -e \"require('fs').rmSync('build', { recursive: true, force: true })\"",
     "lint": "eslint \"src/**/*.{js,ts,tsx}\"",
     "prebuild-local": "yarn clean",
     "build-local": "env-cmd --verbose -e local -r ../env.json webpack",

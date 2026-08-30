@@ -1168,7 +1168,7 @@ class CreateTour extends React.PureComponent<IProps, IOwnStateProps> {
     }
 
     if (this.state.loading
-      || this.props.globalConfig === null
+      || !this.props.globalConfig
       || this.props.subs === null
       || !this.props.allToursLoaded) {
       return (

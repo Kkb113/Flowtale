@@ -1,5 +1,6 @@
 package com.sharefable.api.config;
 
+import com.amazonaws.client.builder.AwsClientBuilder;
 import com.amazonaws.services.s3.AmazonS3;
 import com.amazonaws.services.s3.AmazonS3ClientBuilder;
 import com.sharefable.api.common.AssetFilePath;
@@ -54,6 +55,8 @@ public class S3Config {
   private String pvtAssetBucketName;
   private String pvtAssetBucketRegion;
   private String cdn;
+  private String endpoint;
+  private String publicEndpoint;
 
   @Autowired
   private AppConfig appConfig;
@@ -145,6 +148,7 @@ public class S3Config {
     assetFilePath.setBucketName(assetBucketName);
     assetFilePath.setRegionName(region);
     assetFilePath.setCdn(cdn);
+    assetFilePath.setPublicEndpoint(publicEndpoint);
     return assetFilePath;
   }
 
@@ -153,6 +157,7 @@ public class S3Config {
     assetFilePath.setBucketName(pvtAssetBucketName);
     assetFilePath.setRegionName(pvtAssetBucketRegion);
     assetFilePath.setPrivateFile(true);
+    assetFilePath.setPublicEndpoint(publicEndpoint);
     return assetFilePath;
   }
 
@@ -171,13 +176,24 @@ public class S3Config {
   @Bean
   @Primary
   AmazonS3 s3Client() {
-    return AmazonS3ClientBuilder.standard().withRegion(region).build();
+    return buildClient(region);
   }
 
   @Bean
   @Qualifier("pvt")
   AmazonS3 pvtS3Client() {
-    return AmazonS3ClientBuilder.standard().withRegion(pvtAssetBucketRegion).build();
+    return buildClient(pvtAssetBucketRegion);
+  }
+
+  private AmazonS3 buildClient(String clientRegion) {
+    AmazonS3ClientBuilder builder = AmazonS3ClientBuilder.standard();
+    if (StringUtils.isBlank(endpoint)) {
+      return builder.withRegion(clientRegion).build();
+    }
+    return builder
+      .withEndpointConfiguration(new AwsClientBuilder.EndpointConfiguration(endpoint, clientRegion))
+      .withPathStyleAccessEnabled(true)
+      .build();
   }
 
   public enum AssetType {

@@ -21,6 +21,7 @@ public class AssetFilePath {
   // File path after the prefix path data/index.json
   String filePath;
   boolean privateFile = false;
+  String publicEndpoint;
 
   public static AssetFilePath from(AssetFilePath halfConstructedPath, String qualifiedPath) {
     return new AssetFilePath(
@@ -30,7 +31,8 @@ public class AssetFilePath {
       qualifiedPath,
       "",
       "",
-      halfConstructedPath.privateFile
+      halfConstructedPath.privateFile,
+      halfConstructedPath.publicEndpoint
     );
   }
 
@@ -42,11 +44,17 @@ public class AssetFilePath {
       assetFilePath.fullQualifiedPath,
       assetFilePath.prefixPathForType,
       assetFilePath.filePath,
-      assetFilePath.isPrivateFile()
+      assetFilePath.isPrivateFile(),
+      assetFilePath.publicEndpoint
     );
   }
 
   public String getBucketUriToFile() {
+    if (StringUtils.isNotBlank(publicEndpoint)) {
+      return StringUtils.removeEnd(publicEndpoint, "/")
+        + "/" + bucketName
+        + "/" + StringUtils.removeStart(fullQualifiedPath, "/");
+    }
     return "https://" + bucketName + ".s3." + regionName + ".amazonaws.com/" + fullQualifiedPath;
   }
 

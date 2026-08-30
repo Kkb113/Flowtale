@@ -102,7 +102,7 @@ Before you begin, ensure you have the following installed:
 - **Docker** and **Docker Compose** (>= 1.28.0)
 - **MySQL 8+** (or use Docker Compose)
 - **PostgreSQL 16** (or use Docker Compose)
-- **AWS Account** with access to:
+- **AWS Account** for staging/production only, with access to:
   - S3 (for asset storage)
   - SQS (for message queuing)
   - Kinesis Firehose (for event streaming)
@@ -154,7 +154,7 @@ This creates:
 
 ### 4. Start Dependencies with Docker
 
-Start MySQL and PostgreSQL databases:
+Start MySQL, PostgreSQL, and LocalStack (S3/SQS):
 
 ```bash
 make setup
@@ -163,6 +163,7 @@ make setup
 This will:
 - Start MySQL container on port 3306
 - Start PostgreSQL container on port 5432
+- Start LocalStack on port 4566 and initialize the local asset buckets and tour queue
 - Create necessary volumes for data persistence
 
 ### 5. Run Database Migrations

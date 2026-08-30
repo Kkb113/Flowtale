@@ -39,6 +39,8 @@ import java.util.stream.Collectors;
 @Service
 @Slf4j
 public class WorkspaceService extends ServiceBase {
+  private static final String GLOBAL_OPTS_CONFIG_KEY = "GLOBAL OPTS";
+
   private final OrgRepo orgRepo;
   private final S3Config s3Config;
   private final UserRepo userRepo;
@@ -120,14 +122,12 @@ public class WorkspaceService extends ServiceBase {
     Org org = orgBuilder.build();
     Org savedOrg = orgRepo.save(org);
 
-    Object globalOpts = settings.getGlobalOpts();
-
     EntityConfigKV config = EntityConfigKV.builder()
       .entityType(ConfigEntityType.Org)
       .entityId(savedOrg.getId())
       .configType(EntityConfigConfigType.GLOBAL_OPTS)
-      .configKey("GLOBAL OPTS")
-      .configVal(globalOpts)
+      .configKey(GLOBAL_OPTS_CONFIG_KEY)
+      .configVal(settings.getGlobalOpts())
       .build();
     entityConfigKVRepo.save(config);
 
@@ -212,8 +212,15 @@ public class WorkspaceService extends ServiceBase {
 
   @Transactional
   public RespGlobalOpts updateGlobalOpts(ReqUpdateGlobalOpts body, User user) {
-    EntityConfigKV entityConfigKV = entityConfigService.getEntityConfig(ConfigEntityType.Org, user.getBelongsToOrg(), EntityConfigConfigType.GLOBAL_OPTS);
-    entityConfigKV.setConfigVal(body.editData());
+    Map<String, Object> globalOpts;
+    try {
+      globalOpts = parseGlobalOpts(body.editData());
+    } catch (IOException e) {
+      throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Global options must be a JSON object", e);
+    }
+
+    EntityConfigKV entityConfigKV = getOrCreateGlobalOpts(user.getBelongsToOrg());
+    entityConfigKV.setConfigVal(globalOpts);
     EntityConfigKV savedEntityConfigKv = entityConfigKVRepo.save(entityConfigKV);
 
     return RespGlobalOpts.builder().globalOpts(savedEntityConfigKv.getConfigVal()).build();
@@ -221,8 +228,57 @@ public class WorkspaceService extends ServiceBase {
 
   @Transactional
   public RespGlobalOpts getGlobalOpts(User user) {
-    EntityConfigKV entityConfigKV = entityConfigService.getEntityConfig(ConfigEntityType.Org, user.getBelongsToOrg(), EntityConfigConfigType.GLOBAL_OPTS);
+    EntityConfigKV entityConfigKV = getOrCreateGlobalOpts(user.getBelongsToOrg());
     return RespGlobalOpts.builder().globalOpts(entityConfigKV.getConfigVal()).build();
+  }
+
+  private EntityConfigKV getOrCreateGlobalOpts(Long orgId) {
+    EntityConfigKV entityConfigKV = entityConfigService.getEntityConfig(
+      ConfigEntityType.Org,
+      orgId,
+      EntityConfigConfigType.GLOBAL_OPTS
+    );
+    if (entityConfigKV == null) {
+      entityConfigKV = EntityConfigKV.builder()
+        .entityType(ConfigEntityType.Org)
+        .entityId(orgId)
+        .configType(EntityConfigConfigType.GLOBAL_OPTS)
+        .configKey(GLOBAL_OPTS_CONFIG_KEY)
+        .build();
+    }
+
+    Map<String, Object> normalizedGlobalOpts;
+    try {
+      normalizedGlobalOpts = parseGlobalOpts(entityConfigKV.getConfigVal());
+    } catch (IOException e) {
+      log.warn("Invalid global options for org [{}]; restoring application defaults", orgId);
+      normalizedGlobalOpts = new HashMap<>(settings.getGlobalOpts());
+    }
+
+    if (!Objects.equals(entityConfigKV.getConfigVal(), normalizedGlobalOpts)) {
+      entityConfigKV.setConfigVal(normalizedGlobalOpts);
+      entityConfigKV = entityConfigKVRepo.save(entityConfigKV);
+    }
+    return entityConfigKV;
+  }
+
+  private Map<String, Object> parseGlobalOpts(Object rawGlobalOpts) throws IOException {
+    if (rawGlobalOpts == null) {
+      return new HashMap<>(settings.getGlobalOpts());
+    }
+
+    Object parsed = rawGlobalOpts;
+    if (parsed instanceof String json) {
+      parsed = mapper.readValue(json, Object.class);
+      if (parsed instanceof String nestedJson) {
+        parsed = mapper.readValue(nestedJson, Object.class);
+      }
+    }
+    if (!(parsed instanceof Map<?, ?>)) {
+      throw new IOException("Global options are not a JSON object");
+    }
+    return mapper.convertValue(parsed, new com.fasterxml.jackson.core.type.TypeReference<>() {
+    });
   }
 
   public void getCommonConfig(RespCommonConfig.RespCommonConfigBuilder builder) {

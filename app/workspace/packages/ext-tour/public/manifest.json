@@ -34,15 +34,11 @@
     "cookies",
     "unlimitedStorage"
   ],
-  "optional_host_permissions": [
-    "*://*/*"
-  ],
   "content_security_policy": {
     "extension_pages": "script-src 'self'; object-src 'self'"
   },
   "host_permissions": [
-    "<all_urls>",
-    "*://*/*"
+    "<all_urls>"
   ],
   "externally_connectable": {
     "matches": [

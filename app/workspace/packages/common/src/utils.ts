@@ -309,6 +309,29 @@ export const getSampleGlobalConfig = (): IGlobalConfig => ({
   version: 1,
 });
 
+export const normalizeGlobalConfig = (rawGlobalOpts: unknown): IGlobalConfig => {
+  const parseConfig = (value: unknown): unknown => {
+    if (typeof value !== 'string') return value;
+    try {
+      return JSON.parse(value);
+    } catch (e) {
+      return {};
+    }
+  };
+
+  const parsed = parseConfig(parseConfig(rawGlobalOpts));
+  const overrides = parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+    ? Object.entries(parsed as Record<string, unknown>)
+      .filter(([, value]) => value !== null && value !== undefined)
+      .reduce((config, [key, value]) => ({ ...config, [key]: value }), {})
+    : {};
+
+  return {
+    ...getSampleGlobalConfig(),
+    ...overrides,
+  };
+};
+
 export const isProdEnv = () => {
   const isProd = (process.env.REACT_APP_ENVIRONMENT === 'prod') || (process.env.REACT_APP_ENVIRONMENT === 'staging');
   return isProd;
@@ -601,7 +624,7 @@ export function compileValue(
   globalOpts : IGlobalConfig,
   path :typeof GlobalPropsPath[keyof typeof GlobalPropsPath]
 ): any {
-  const opts = { ...globalOpts };
+  const opts = normalizeGlobalConfig(globalOpts);
   const keys : string[] = path.split('.').slice(1);
   return keys.reduce((acc, key) => acc[key], opts as any);
 }
