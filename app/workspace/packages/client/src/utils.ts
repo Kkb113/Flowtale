@@ -23,7 +23,7 @@ import {
   TourScreenEntity,
   VideoAnnotationPositions,
 } from '@fable/common/dist/types';
-import { GlobalPropsPath, compileValue, createGlobalProperty, createLiteralProperty, deepcopy, getCurrentUtcUnixTime, getRandomId } from '@fable/common/dist/utils';
+import { GlobalPropsPath, compileValue, createGlobalProperty, createLiteralProperty, deepcopy, getCurrentUtcUnixTime, getRandomId, isLocalFullAccessEnabled } from '@fable/common/dist/utils';
 import { nanoid } from 'nanoid';
 import { useEffect, useRef } from 'react';
 import Handlebars from 'handlebars';
@@ -1231,6 +1231,9 @@ export const isFeatureAvailable = (
   feature: string,
   currentValue?: number
 ): FeatureAvailability => {
+  if (isLocalFullAccessEnabled()) {
+    return fallbackFeatureAvailability;
+  }
   if (!featureForPlan) {
     return fallbackFeatureAvailability;
   }

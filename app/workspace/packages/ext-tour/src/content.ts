@@ -275,18 +275,24 @@ function installMessageListenerInFrame(win: Window, frameId: string) {
   if (!(win && frameId)) return;
 
   (win as any).__data_fable_frameid__ = frameId;
-  let i = 1;
-  const timer = setInterval(() => {
-    // we will try this 5 times in case the parent frame hasn't been set up when the child frame send the message.
-    // This message passing could be called multiple times hence we should always make this function idempotent
-    if (i++ > 5) clearTimeout(timer);
-    win.parent.postMessage({
-      from: FABLE_MSG_FROM_IDENTIFIER,
-      type: "idpropagation",
-      relay: frameId,
-      value: frameId
-    }, "*");
-  }, 1000);
+  const shouldPropagateToParent = win.parent !== win && win.frameElement === null;
+  if (shouldPropagateToParent) {
+    let i = 1;
+    const timer = setInterval(() => {
+      // we will try this 5 times in case the parent frame hasn't been set up when the child frame send the message.
+      // This message passing could be called multiple times hence we should always make this function idempotent
+      if (i++ > 5) {
+        clearInterval(timer);
+        return;
+      }
+      win.parent.postMessage({
+        from: FABLE_MSG_FROM_IDENTIFIER,
+        type: "idpropagation",
+        relay: frameId,
+        value: frameId
+      }, "*");
+    }, 1000);
+  }
 
   win.addEventListener("message", msg => {
     if (msg && msg.data && msg.data.from === FABLE_MSG_FROM_IDENTIFIER) {
@@ -294,8 +300,12 @@ function installMessageListenerInFrame(win: Window, frameId: string) {
       if (msg.data.type === "idpropagation") {
         const frames = getAllIframesInDoc("crossorigin", win.document);
         const fs = frames.filter(f => f.contentWindow === msg.source);
-        if (fs.length !== 1) {
-          console.warn("[Fable] No unique target found. Required 1, recieved ", fs.length, ". id", frameId);
+        if (fs.length === 0) {
+          // The source iframe can be removed or navigate before the propagation message is handled.
+          return;
+        }
+        if (fs.length > 1) {
+          console.warn("[Fable] No unique target found. Required 1, received ", fs.length, ". id", frameId);
           return;
         }
         fs[0].setAttribute(FABLE_ID_ID, msg.data.value);

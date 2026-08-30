@@ -1,12 +1,40 @@
 import {
   getDefaultTourOpts,
   getDisplayableTime,
+  isLocalFullAccessEnabled,
   normalizeGlobalConfig,
   SHORT_MONTHS,
 } from './utils';
 import { IGlobalConfig } from './types';
 
 describe('utils', () => {
+  describe('#isLocalFullAccessEnabled', () => {
+    const originalEnvironment = process.env.REACT_APP_ENVIRONMENT;
+    const originalLocalFullAccess = process.env.REACT_APP_LOCAL_FULL_ACCESS;
+
+    afterEach(() => {
+      if (originalEnvironment === undefined) delete process.env.REACT_APP_ENVIRONMENT;
+      else process.env.REACT_APP_ENVIRONMENT = originalEnvironment;
+
+      if (originalLocalFullAccess === undefined) delete process.env.REACT_APP_LOCAL_FULL_ACCESS;
+      else process.env.REACT_APP_LOCAL_FULL_ACCESS = originalLocalFullAccess;
+    });
+
+    it('is enabled only when the explicit local flag is set', () => {
+      process.env.REACT_APP_ENVIRONMENT = 'local';
+      process.env.REACT_APP_LOCAL_FULL_ACCESS = 'true';
+
+      expect(isLocalFullAccessEnabled()).toBe(true);
+    });
+
+    it('does not bypass feature access outside the local environment', () => {
+      process.env.REACT_APP_ENVIRONMENT = 'prod';
+      process.env.REACT_APP_LOCAL_FULL_ACCESS = 'true';
+
+      expect(isLocalFullAccessEnabled()).toBe(false);
+    });
+  });
+
   describe('#getDisplayableTime', () => {
     it('should return readable time relative to the current time', () => {
       const currentTime = +new Date();

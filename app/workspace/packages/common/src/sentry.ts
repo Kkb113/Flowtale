@@ -3,6 +3,7 @@ import {
   BrowserTracing,
   Replay, Transaction,
   BrowserOptions,
+  startTransaction,
   withScope,
   captureMessage,
   captureException,
@@ -71,14 +72,22 @@ export const init = (target: Target, version: string) => {
   sentryInit(initOptions);
 };
 
+export const sentryStartTransaction = (name: string): Transaction | null => {
+  if (!isProdEnv()) {
+    return null;
+  }
+
+  return startTransaction({ name });
+};
+
 export const sentryTxReport = (
-  transaction: Transaction,
+  transaction: Transaction | null | undefined,
   measureName: string,
   measureValue: number,
   measureUnit: string,
   shouldFinish = true
 ) => {
-  if (!isProdEnv()) {
+  if (!isProdEnv() || !transaction) {
     return;
   }
 

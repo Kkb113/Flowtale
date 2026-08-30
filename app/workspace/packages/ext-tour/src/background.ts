@@ -17,12 +17,14 @@ import {
   ReqScreenshotData,
   ScreenSerDataFromCS,
   ScreenSerStartData,
-  ScriptInitReportedData,
   ScriptInitRequiredData,
-  SerializeFrameData,
-  StopRecordingData,
 } from "./types";
-import { BATCH_SIZE, isCrossOrigin } from "./utils";
+import {
+  BATCH_SIZE,
+  isCrossOrigin,
+  isMissingMessageReceiverError,
+  isRecordableUrl
+} from "./utils";
 import { version } from "../package.json";
 
 sentryInit("background", version);
@@ -37,6 +39,26 @@ const TABS_TO_TRACK = "app_update_listnr_for_tab_ids";
 const FRAMES_IN_TAB = "frames_in_tab";
 const SCREEN_DATA_FINISHED = "screen_data_finished";
 const SCREEN_STYLE_DATA = "screen_style_data";
+
+async function sendTabMessageIfListening(tabId: number, message: object): Promise<boolean> {
+  try {
+    await chrome.tabs.sendMessage(tabId, message);
+    return true;
+  } catch (error) {
+    if (isMissingMessageReceiverError(error)) return false;
+    throw error;
+  }
+}
+
+async function sendRuntimeMessageIfListening(message: object): Promise<boolean> {
+  try {
+    await chrome.runtime.sendMessage(message);
+    return true;
+  } catch (error) {
+    if (isMissingMessageReceiverError(error)) return false;
+    throw error;
+  }
+}
 
 interface FrameDataToBeProcessed {
   oid: number;
@@ -235,7 +257,7 @@ function finishAppRecording(
       throw e;
     } finally {
       await resetAppState();
-      await chrome.runtime.sendMessage({
+      await sendRuntimeMessageIfListening({
         type: Msg.RECORDING_CREATE_OR_DELETE_COMPLETED,
       });
     }
@@ -371,6 +393,13 @@ function getScreenDim() {
 }
 
 function getFavourableScreenDimension(tab: chrome.tabs.Tab) {
+  if (!isRecordableUrl(tab.url)) {
+    return Promise.resolve({
+      screenWidth: -1,
+      screenHeight: -1
+    });
+  }
+
   return chrome.scripting.executeScript({
     target: {
       tabId: tab.id!,
@@ -524,7 +553,7 @@ chrome.runtime.onMessage.addListener(async (msg: MsgPayload<any>, sender) => {
       // script like frameId
       const tMsg = msg as MsgPayload<ScriptInitRequiredData>;
       if (sender.tab && sender.tab.id) {
-        await chrome.tabs.sendMessage<MsgPayload<ScriptInitReportedData>>(
+        await sendTabMessageIfListening(
           sender.tab.id!,
           { type: Msg.SCRIPT_INIT_DATA, data: { frameId: sender.frameId || 0, scriptId: tMsg.data.scriptId } }
         );
@@ -536,7 +565,7 @@ chrome.runtime.onMessage.addListener(async (msg: MsgPayload<any>, sender) => {
       const tMsg = msg as MsgPayload<ScreenSerStartData>;
       const frameId = sender.frameId === undefined ? -1 : sender.frameId;
       if (tMsg.data.eventType === "source") {
-        chrome.tabs.sendMessage<MsgPayload<SerializeFrameData>>(
+        await sendTabMessageIfListening(
           sender.tab!.id!,
           { type: Msg.SERIALIZE_FRAME, data: { srcFrameId: frameId, id: tMsg.data.id } }
         );
@@ -571,10 +600,10 @@ chrome.runtime.onMessage.addListener(async (msg: MsgPayload<any>, sender) => {
 
     case Msg.START_RECORDING: {
       await resetAppState();
+      const recordingStarted = await startRecording();
       await chrome.storage.local.set({
-        [APP_RECORDING_STATE]: RecordingStatus.Recording,
+        [APP_RECORDING_STATE]: recordingStarted ? RecordingStatus.Recording : RecordingStatus.Idle,
       });
-      await startRecording();
       break;
     }
 
@@ -600,7 +629,13 @@ chrome.runtime.onMessage.addListener(async (msg: MsgPayload<any>, sender) => {
         [APP_RECORDING_STATE]: RecordingStatus.Stopping,
       });
       await stopRecording();
-      const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+      const tab = await getTabForRecordingStop();
+      if (!(tab && tab.id)) {
+        await chrome.storage.local.set({
+          [APP_RECORDING_STATE]: RecordingStatus.Idle,
+        });
+        break;
+      }
       const id = snowflake();
       // this has to be the first message for us to know that messagw with the following id gonna be the last
       // interaction
@@ -612,7 +647,7 @@ chrome.runtime.onMessage.addListener(async (msg: MsgPayload<any>, sender) => {
         data: "",
         interactionCtx: null,
       });
-      await chrome.tabs.sendMessage<MsgPayload<StopRecordingData>>(tab.id!, {
+      await sendTabMessageIfListening(tab.id!, {
         type: Msg.STOP_RECORDING,
         data: { id }
       });
@@ -713,6 +748,8 @@ function clearLoadingIcon(tabId: number) {
 }
 
 async function injectContentScriptInCrossOriginFrames(tab: { id: number, url: string }) {
+  if (!isRecordableUrl(tab.url)) return;
+
   // Cross-origin frames document are not accessible because of CORS hence we inject separate scripts to all
   // cross-origin frames. The same origin frames are read from inside the parent frame itself
   const framesInPage = (await chrome.webNavigation.getAllFrames({
@@ -784,7 +821,7 @@ async function onTabStateUpdate(tabId: number, info: chrome.tabs.TabChangeInfo) 
   const tabsToLookFor = (await chrome.storage.local.get(TABS_TO_TRACK))[TABS_TO_TRACK] || {};
   if (info.status === "complete" && tabId in tabsToLookFor) {
     const tab = await chrome.tabs.get(tabId);
-    if (!tab) return;
+    if (!tab || !isRecordableUrl(tab.url)) return;
     tabsToLookFor[tabId] = tab.url;
     await chrome.storage.local.set({
       [TABS_TO_TRACK]: tabsToLookFor
@@ -799,7 +836,7 @@ async function onTabActive(activeInfo: chrome.tabs.TabActiveInfo) {
   if (activeInfo.tabId in tabsToLookFor) return;
 
   const tab = await chrome.tabs.get(activeInfo.tabId);
-  if (!tab) return;
+  if (!tab || !isRecordableUrl(tab.url)) return;
 
   tabsToLookFor[activeInfo.tabId] = tab.url;
   await chrome.storage.local.set({
@@ -809,10 +846,33 @@ async function onTabActive(activeInfo: chrome.tabs.TabActiveInfo) {
   await showLoadingIcon(activeInfo.tabId);
 }
 
-async function startRecording(): Promise<void> {
+async function getTabForRecordingStop(): Promise<chrome.tabs.Tab | null> {
+  const tabsToLookFor = (await chrome.storage.local.get(TABS_TO_TRACK))[TABS_TO_TRACK] || {};
+  const [activeTab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+  if (activeTab?.id && activeTab.id in tabsToLookFor && isRecordableUrl(activeTab.url)) {
+    return activeTab;
+  }
+
+  const trackedTabIds = Object.keys(tabsToLookFor).reverse();
+  for (const trackedTabId of trackedTabIds) {
+    try {
+      const tab = await chrome.tabs.get(+trackedTabId);
+      if (isRecordableUrl(tab.url)) return tab;
+    } catch {
+      // A recorded tab may have been closed before the user stopped the session.
+    }
+  }
+
+  return null;
+}
+
+async function startRecording(): Promise<boolean> {
   const tab = await getActiveTab();
   if (!(tab && tab.id)) {
     throw new Error("Active tab not found. Are you focused on the browser?");
+  }
+  if (!isRecordableUrl(tab.url)) {
+    return false;
   }
 
   chrome.tabs.onUpdated.addListener(onTabStateUpdate);
@@ -825,6 +885,7 @@ async function startRecording(): Promise<void> {
     await injectContentScriptInCrossOriginFrames({ id: tab.id!, url: tab.url! }),
     await chrome.tabs.sendMessage(tab.id!, { type: Msg.SHOW_COUNTDOWN_MODAL }),
   ]);
+  return true;
 }
 
 async function stopRecording() {

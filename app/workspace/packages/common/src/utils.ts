@@ -337,6 +337,11 @@ export const isProdEnv = () => {
   return isProd;
 };
 
+export const isLocalFullAccessEnabled = () => (
+  process.env.REACT_APP_ENVIRONMENT === 'local'
+  && process.env.REACT_APP_LOCAL_FULL_ACCESS === 'true'
+);
+
 export const getImgScreenData = () => ({
   version: '2023-01-10',
   vpd: {

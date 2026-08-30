@@ -9,7 +9,8 @@ import {
 } from '@fable/common/dist/types';
 import React from 'react';
 import { FrameSettings, ScreenType } from '@fable/common/dist/api-contract';
-import { captureException, startTransaction } from '@sentry/react';
+import { captureException } from '@sentry/react';
+import { sentryStartTransaction } from '@fable/common/dist/sentry';
 import { DEFAULT_BLUE_BORDER_COLOR } from '@fable/common/dist/constants';
 import raiseDeferredError from '@fable/common/dist/deferred-error';
 import { sleep } from '@fable/common/dist/utils';
@@ -717,7 +718,7 @@ export default class ScreenPreviewWithEditsAndAnnotationsReadonly
       const allEdits = combineAllEdits([...goToScreenEdits, ...this.props.globalEdits]);
       goToScreenData = applyEditsToSerDom(allEdits, goToScreenData);
       const startTime = performance.now();
-      const sentryTransaction = startTransaction({ name: 'getAndApplyDiffsTx' });
+      const sentryTransaction = sentryStartTransaction('getAndApplyDiffsTx');
 
       const res = await this.getAndApplyDiffs(
         currScreenData.docTree,

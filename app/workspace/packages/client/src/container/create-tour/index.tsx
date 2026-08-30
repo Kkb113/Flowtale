@@ -1,4 +1,4 @@
-import { sentryTxReport } from '@fable/common/dist/sentry';
+import { sentryStartTransaction, sentryTxReport } from '@fable/common/dist/sentry';
 import {
   DEFAULT_BORDER_RADIUS,
   CmnEvtProp,
@@ -9,7 +9,7 @@ import {
   ThemeStats,
   IGlobalConfig,
 } from '@fable/common/dist/types';
-import { captureException, startTransaction, Transaction } from '@sentry/react';
+import { captureException, Transaction } from '@sentry/react';
 import React, { ReactElement, Suspense, lazy } from 'react';
 import { connect } from 'react-redux';
 import { TypeAnimation } from 'react-type-animation';
@@ -460,7 +460,7 @@ class CreateTour extends React.PureComponent<IProps, IOwnStateProps> {
   });
 
   processScreens = async (): Promise<void> => {
-    this.sentryTransaction = startTransaction({ name: 'saveCreateTour' });
+    this.sentryTransaction = sentryStartTransaction('saveCreateTour');
     let frameDataToBeProcessed = JSON.parse(this.data!.screensData) as FrameDataToBeProcessed[][];
     this.frameDataToBeProcessed = frameDataToBeProcessed = frameDataToBeProcessed.filter(screenFrames => {
       if (screenFrames.length === 0) return false;
@@ -595,7 +595,7 @@ class CreateTour extends React.PureComponent<IProps, IOwnStateProps> {
     );
     setEventCommonState(CmnEvtProp.TOUR_URL, createIframeSrc(`/demo/${tour.data.rid}`));
 
-    sentryTxReport(this.sentryTransaction!, 'screensCount', this.state.screens.length, 'byte');
+    sentryTxReport(this.sentryTransaction, 'screensCount', this.state.screens.length, 'byte');
     await deleteDataFromDb(this.db, OBJECT_STORE, OBJECT_KEY_VALUE);
     this.props.addNewTourToAllTours(tour.data);
 
@@ -655,7 +655,7 @@ class CreateTour extends React.PureComponent<IProps, IOwnStateProps> {
       this.state.demoObjective,
     );
     amplitudeAddScreensToTour(this.state.screens.length, 'ext');
-    sentryTxReport(this.sentryTransaction!, 'screensCount', this.state.screens.length, 'byte');
+    sentryTxReport(this.sentryTransaction, 'screensCount', this.state.screens.length, 'byte');
     await deleteDataFromDb(this.db, OBJECT_STORE, OBJECT_KEY_VALUE);
 
     const params = createdUsingAI ? `?${AI_PARAM}` : '';
@@ -1208,9 +1208,9 @@ class CreateTour extends React.PureComponent<IProps, IOwnStateProps> {
         return (
           <OnboardingLayout>
             <Tags.LayoutContainer>
-              <Tags.HeaderText>Demo creation limit exhaused</Tags.HeaderText>
+              <Tags.HeaderText>Demo creation limit exhausted</Tags.HeaderText>
               <Tags.SubheaderText>
-                You have exhaused your demo creation limit in your {this.props.subs.paymentPlan} plan. Upgrade to create more demos.
+                You have exhausted your demo creation limit in your {this.props.subs.paymentPlan} plan. Upgrade to create more demos.
                 <div style={{ fontStyle: 'italic' }}>
                   You don't have to re-record your demo again, you can reopen the current URL after upgrade and demo creation will resume.
                 </div>

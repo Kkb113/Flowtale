@@ -52,6 +52,9 @@ yarn workspace @fable/client build-staging
 Remove-Item Env:CI
 ```
 
+The `local` frontend profile explicitly enables `REACT_APP_LOCAL_FULL_ACCESS` so plan-based UI gates do not block
+local end-to-end testing. Staging and production profiles omit the flag and keep the existing entitlement checks.
+
 ### Jobs
 
 ```powershell

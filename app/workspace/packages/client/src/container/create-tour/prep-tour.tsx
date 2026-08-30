@@ -1,7 +1,7 @@
 import React from 'react';
 import { connect } from 'react-redux';
-import { startTransaction, captureException } from '@sentry/react';
-import { sentryTxReport } from '@fable/common/dist/sentry';
+import { captureException } from '@sentry/react';
+import { sentryStartTransaction, sentryTxReport } from '@fable/common/dist/sentry';
 import { Progress } from 'antd';
 import { openDb, putDataInDb, DB_NAME, OBJECT_STORE, OBJECT_KEY, OBJECT_KEY_VALUE, DBData } from '@fable/common/dist/db-utils';
 import { getDataFromDb } from './db-utils';
@@ -124,7 +124,7 @@ class PrepTour extends React.PureComponent<IProps, IOwnStateProps> {
         };
 
         if (db) {
-          const transaction = startTransaction({ name: 'saveTourDataToIndexedDB' });
+          const transaction = sentryStartTransaction('saveTourDataToIndexedDB');
           await putDataInDb(db, OBJECT_STORE, data);
           sentryTxReport(transaction, 'screenscount', JSON.parse(screensData).length, 'byte');
           const dbData = await getDataFromDb(db, OBJECT_STORE, OBJECT_KEY_VALUE) as DBData;

@@ -9,6 +9,22 @@ export const FABLE_DONT_SER_CLASSNAME = "fable-dont-ser";
  */
 export const BATCH_SIZE = 1;
 
+export function isRecordableUrl(url: string | null | undefined): boolean {
+  if (!url) return false;
+
+  try {
+    const protocol = new URL(url).protocol;
+    return protocol === "http:" || protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
+export function isMissingMessageReceiverError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.includes("Could not establish connection. Receiving end does not exist");
+}
+
 export function getRandomId(): string {
   return Math.random().toString(16).substring(2, 15) + Math.random().toString(16).substring(2, 15);
 }

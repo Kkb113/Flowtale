@@ -1,5 +1,4 @@
-import { startTransaction } from "@sentry/browser";
-import { init as sentryInit, sentryTxReport } from "@fable/common/dist/sentry";
+import { init as sentryInit, sentryStartTransaction, sentryTxReport } from "@fable/common/dist/sentry";
 import { openDb, putDataInDb, DB_NAME, OBJECT_STORE, OBJECT_KEY, OBJECT_KEY_VALUE } from "@fable/common/dist/db-utils";
 import { Msg } from "./msg";
 import { FrameDataToBeProcessed } from "./types";
@@ -107,7 +106,7 @@ function init() {
 
     if (styleDataReceived && cookiesDataReceived && commitReceived && versionReceived) {
       setTimeout(async () => {
-        const transaction = startTransaction({ name: "dataTransferToClientContent" });
+        const transaction = sentryStartTransaction("dataTransferToClientContent");
         const db = await openDb(DB_NAME, OBJECT_STORE, 1, OBJECT_KEY);
         const dbData: DBData = {
           id: OBJECT_KEY_VALUE,

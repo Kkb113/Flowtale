@@ -1,6 +1,37 @@
-import { getCookieHeaderForUrl, getAbsoluteUrl } from "./utils";
+import {
+  getCookieHeaderForUrl,
+  getAbsoluteUrl,
+  isMissingMessageReceiverError,
+  isRecordableUrl
+} from "./utils";
 
 describe("utils", () => {
+  describe("#isRecordableUrl", () => {
+    it("allows regular and local web pages", () => {
+      expect(isRecordableUrl("https://example.com/path")).toBe(true);
+      expect(isRecordableUrl("http://localhost:3000/demos")).toBe(true);
+    });
+
+    it("rejects browser-owned and invalid URLs", () => {
+      expect(isRecordableUrl("chrome://extensions")).toBe(false);
+      expect(isRecordableUrl("chrome-extension://extension-id/popup.html")).toBe(false);
+      expect(isRecordableUrl("about:blank")).toBe(false);
+      expect(isRecordableUrl("not a url")).toBe(false);
+    });
+  });
+
+  describe("#isMissingMessageReceiverError", () => {
+    it("recognizes the expected no-listener rejection", () => {
+      expect(isMissingMessageReceiverError(
+        new Error("Could not establish connection. Receiving end does not exist.")
+      )).toBe(true);
+    });
+
+    it("does not hide unrelated messaging failures", () => {
+      expect(isMissingMessageReceiverError(new Error("Tab was closed"))).toBe(false);
+    });
+  });
+
   describe("#getCookieHeaderForUrl", () => {
     const allCookies: chrome.cookies.Cookie[] = [
       {
