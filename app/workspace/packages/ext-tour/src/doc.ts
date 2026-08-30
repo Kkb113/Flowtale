@@ -5,14 +5,13 @@ import {
   ThemeColorCandidatPerNode
 } from "@fable/common/dist/types";
 import { nanoid } from "nanoid";
-import { rgbToHex, getUrlsFromSrcset } from "@fable/common/dist/utils";
+import { getUrlsFromSrcset } from "@fable/common/dist/utils";
 import {
   FABLE_DONT_SER_CLASSNAME,
   isCrossOrigin,
   isContentEmpty,
   isVisible,
-  standardizeHex,
-  hslToHex,
+  normalizeThemeColor,
   isShadeOfWhiteOrBlack,
   getNormalizedBorderRadius,
   sanitizeUrlsInCssStr,
@@ -762,14 +761,9 @@ export function getScreenStyle(
       const style = getComputedStyle(tNode);
 
       if (style.backgroundColor) {
-        const colorValue = style.backgroundColor;
-        const hexValue: string = colorValue.startsWith("rgb")
-          ? rgbToHex(colorValue)
-          : colorValue.startsWith("hsl")
-            ? hslToHex(colorValue)
-            : standardizeHex(colorValue);
+        const hexValue = normalizeThemeColor(style.backgroundColor);
 
-        if (!isShadeOfWhiteOrBlack(hexValue)) {
+        if (hexValue && !isShadeOfWhiteOrBlack(hexValue)) {
           if (hexValue in colorMap) colorMap[hexValue] += 1;
           else colorMap[hexValue] = 1;
         }

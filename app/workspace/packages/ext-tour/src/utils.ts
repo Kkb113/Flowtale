@@ -1,4 +1,4 @@
-import { hexToRGB } from "@fable/common/dist/utils";
+import { hexToRGB, rgbToHex } from "@fable/common/dist/utils";
 import { DEFAULT_BORDER_RADIUS } from "@fable/common/dist/types";
 
 export const FABLE_DONT_SER_CLASSNAME = "fable-dont-ser";
@@ -156,6 +156,27 @@ export const standardizeHex = (hex: string) : string => {
   const three = hex[3];
   return hex.length === 7 ? hex : `#${one}${one}${two}${two}${three}${three}`;
 };
+
+export function normalizeThemeColor(colorValue: string): string | null {
+  const value = colorValue.trim();
+  let hexValue: string;
+
+  try {
+    if (value.toLowerCase().startsWith("rgb")) {
+      hexValue = rgbToHex(value);
+    } else if (value.toLowerCase().startsWith("hsl")) {
+      hexValue = hslToHex(value);
+    } else if (/^#[0-9a-f]{3}$/i.test(value) || /^#[0-9a-f]{6}$/i.test(value)) {
+      hexValue = standardizeHex(value);
+    } else {
+      return null;
+    }
+  } catch {
+    return null;
+  }
+
+  return /^#[0-9a-f]{6}$/i.test(hexValue) ? hexValue : null;
+}
 
 export function isShadeOfWhiteOrBlack(hexColor: string): boolean {
   const rgbColor = hexToRGB(hexColor);

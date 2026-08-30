@@ -3,7 +3,8 @@ import {
   getAbsoluteUrl,
   isMissingMessageReceiverError,
   isMissingTabError,
-  isRecordableUrl
+  isRecordableUrl,
+  normalizeThemeColor
 } from "./utils";
 
 describe("utils", () => {
@@ -40,6 +41,22 @@ describe("utils", () => {
 
     it("does not hide unrelated tab failures", () => {
       expect(isMissingTabError(new Error("Tabs cannot be edited right now"))).toBe(false);
+    });
+  });
+
+  describe("#normalizeThemeColor", () => {
+    it("preserves supported computed colors as six-digit hex values", () => {
+      expect(normalizeThemeColor("rgb(117, 103, 255)")).toBe("#7567ff");
+      expect(normalizeThemeColor("hsl(248, 100%, 70%)")).toBe("#7a66ff");
+      expect(normalizeThemeColor("#abc")).toBe("#aabbcc");
+      expect(normalizeThemeColor("#AABBCC")).toBe("#AABBCC");
+    });
+
+    it("rejects unsupported and malformed colors instead of manufacturing hex values", () => {
+      expect(normalizeThemeColor("lab(50% 0 0)")).toBeNull();
+      expect(normalizeThemeColor("oklch(62% 0.2 250)")).toBeNull();
+      expect(normalizeThemeColor("transparent")).toBeNull();
+      expect(normalizeThemeColor("#aabb((")).toBeNull();
     });
   });
 

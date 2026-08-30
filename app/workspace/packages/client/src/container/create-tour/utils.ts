@@ -65,6 +65,7 @@ import { post_process_demo } from '@fable/common/dist/llm-fn-schema/post_process
 import { create_guides_step_by_step } from '@fable/common/dist/llm-fn-schema/create_guides_step_by_step';
 import { create_guides_marketing } from '@fable/common/dist/llm-fn-schema/create_guides_marketing';
 import { demo_metadata } from '@fable/common/dist/llm-fn-schema/demo_metadata';
+import { isValidThemeColor } from './theme-colors';
 import {
   AiData,
   AiItem,
@@ -1331,10 +1332,12 @@ export const getOrderedColorsWithScore = (colorsPerNode: ThemeColorCandidatPerNo
       factor = 3;
     }
 
-    for (const [hex, occurrence] of Object.entries(colorMap)) {
-      if (hex in newColors) newColors[hex] += occurrence * factor;
-      else newColors[hex] = occurrence * factor;
-    }
+    Object.entries(colorMap)
+      .filter(([hex]) => isValidThemeColor(hex))
+      .forEach(([hex, occurrence]) => {
+        if (hex in newColors) newColors[hex] += occurrence * factor;
+        else newColors[hex] = occurrence * factor;
+      });
   }
 
   let orderedCandidates = Object.entries(newColors).map(kv => ({
