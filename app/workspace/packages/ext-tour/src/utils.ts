@@ -25,6 +25,11 @@ export function isMissingMessageReceiverError(error: unknown): boolean {
   return message.includes("Could not establish connection. Receiving end does not exist");
 }
 
+export function isMissingTabError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.includes("No tab with id:");
+}
+
 export function getRandomId(): string {
   return Math.random().toString(16).substring(2, 15) + Math.random().toString(16).substring(2, 15);
 }

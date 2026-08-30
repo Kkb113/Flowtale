@@ -2,6 +2,7 @@ import {
   getCookieHeaderForUrl,
   getAbsoluteUrl,
   isMissingMessageReceiverError,
+  isMissingTabError,
   isRecordableUrl
 } from "./utils";
 
@@ -29,6 +30,16 @@ describe("utils", () => {
 
     it("does not hide unrelated messaging failures", () => {
       expect(isMissingMessageReceiverError(new Error("Tab was closed"))).toBe(false);
+    });
+  });
+
+  describe("#isMissingTabError", () => {
+    it("recognizes Chrome's stale-tab rejection", () => {
+      expect(isMissingTabError(new Error("No tab with id: 1697874638."))).toBe(true);
+    });
+
+    it("does not hide unrelated tab failures", () => {
+      expect(isMissingTabError(new Error("Tabs cannot be edited right now"))).toBe(false);
     });
   });
 

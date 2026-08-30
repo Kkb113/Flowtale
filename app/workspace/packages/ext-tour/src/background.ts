@@ -23,6 +23,7 @@ import {
   BATCH_SIZE,
   isCrossOrigin,
   isMissingMessageReceiverError,
+  isMissingTabError,
   isRecordableUrl
 } from "./utils";
 import { version } from "../package.json";
@@ -267,7 +268,13 @@ function finishAppRecording(
 async function resetAppState(): Promise<void> {
   const tabsThatWasBeingTracked = (await chrome.storage.local.get(TABS_TO_TRACK))[TABS_TO_TRACK] || {};
   await Promise.all([
-    ...Object.keys(tabsThatWasBeingTracked).map(tabId => chrome.tabs.reload(+tabId)),
+    ...Object.keys(tabsThatWasBeingTracked).map(async (tabId) => {
+      try {
+        await chrome.tabs.reload(+tabId);
+      } catch (error) {
+        if (!isMissingTabError(error)) throw error;
+      }
+    }),
     chrome.storage.local.set({
       [APP_RECORDING_STATE]: RecordingStatus.Idle,
       [TABS_TO_TRACK]: {},
