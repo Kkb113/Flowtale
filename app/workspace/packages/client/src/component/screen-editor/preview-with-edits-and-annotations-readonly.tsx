@@ -821,7 +821,7 @@ export default class ScreenPreviewWithEditsAndAnnotationsReadonly
   navigateToAnnByRefIdOnSameScreen: NavToAnnByRefIdFn = (annRefId) => {
     this.reachAnnotation(annRefId);
     const main = getCurrentFlowMain(annRefId, this.props.allAnnotationsForTour, this.props.flows);
-    this.props.updateCurrentFlowMain('custom', main);
+    if (main) this.props.updateCurrentFlowMain('custom', main);
   };
 
   render(): JSX.Element {

@@ -109,4 +109,29 @@ describe("DOM Serializtion", () => {
       }
     }(document.documentElement, sDoc));
   });
+
+  it("should inline readable linked stylesheets", () => {
+    document.documentElement.innerHTML = `
+      <head><link rel="stylesheet" crossorigin href="https://app.test/assets/app.css"></head>
+      <body><main class="dashboard">Dashboard</main></body>
+    `;
+    const link = document.querySelector("link")!;
+    Object.defineProperty(link, "sheet", {
+      value: {
+        href: "https://app.test/assets/app.css",
+        cssRules: [{ cssText: ".dashboard { background-image: url('../images/background.png'); display: grid; }" }],
+      },
+    });
+
+    const sFrame = getSearializedDom({ frameId: null }, { doc: document });
+    const sDoc = JSON.parse(sFrame.docTreeStr) as SerNode;
+    const head = sDoc.chldrn.find(node => node.name === "head")!;
+    const style = head.chldrn.find(node => node.name === "style")!;
+
+    expect(style).toBeDefined();
+    expect(style.props.cssRules).toContain("display: grid");
+    expect(style.props.cssRules).toContain("https://app.test/images/background.png");
+    expect(style.props.proxyUrlMap.cssRules).toEqual(["https://app.test/images/background.png"]);
+    expect(style.props.proxyUrlMap.href).toBeUndefined();
+  });
 });

@@ -1502,7 +1502,7 @@ export class AnnotationBubble extends React.PureComponent<AnnBubbleProps> {
   render(): (JSX.Element) {
     const bubbleWidth = 18;
     const midPoint = this.props.win.innerHeight / 2;
-    const left = this.props.box.left - bubbleWidth / 2;
+    let left = this.props.box.left - bubbleWidth / 2;
     let top = this.props.box.top - bubbleWidth / 2;
     if (!this.props.isElVisible) {
       if (top < midPoint) {
@@ -1511,6 +1511,9 @@ export class AnnotationBubble extends React.PureComponent<AnnBubbleProps> {
         top = this.props.win.innerHeight - bubbleWidth / 2;
       }
     }
+    left = Math.max(0, Math.min(left, this.props.win.innerWidth - bubbleWidth));
+    // Keep top-edge markers below the player progress bar so they remain clickable.
+    top = Math.max(bubbleWidth, Math.min(top, this.props.win.innerHeight - bubbleWidth));
     return (
       <>
         <Tags.AnBubble

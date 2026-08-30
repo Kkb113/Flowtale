@@ -25,6 +25,7 @@ function DemoProgressBar(props: Props): JSX.Element {
     if (evt.type === InternalEvents.OnNavigation && evt.detail) {
       const annRefId = evt.detail.currentAnnotationRefId;
       const currentAnn = props.annotationSerialIdMap[annRefId];
+      if (!currentAnn) return;
       setCurrentAnnotationIndex(currentAnn.absIdx);
     }
   };

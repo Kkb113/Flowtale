@@ -256,6 +256,15 @@ export function getSearializedDom(
     if (sNode.name === "link") {
       const tNode = node as HTMLLinkElement;
       if (tNode.sheet) {
+        try {
+          const { cssText, proxyUrls } = getCSSText(tNode.sheet, tNode.sheet.href || doc.baseURI);
+          sNode.name = "style";
+          sNode.props.cssRules = cssText;
+          sNode.props.proxyUrlMap.cssRules = sanitizeUrlsInCssStr(proxyUrls);
+          return { serNode: sNode, postProcess: Boolean(proxyUrls.length) };
+        } catch (e) {
+          // Cross-origin stylesheets do not expose cssRules. Keep proxying those by href.
+        }
         sNode.props.proxyUrlMap.href = tNode.sheet.href ? [tNode.sheet.href] : undefined;
         sNode.props.isStylesheet = true;
         return { serNode: sNode, postProcess: true };
@@ -823,14 +832,33 @@ function getAllAdoptedStylesheets(currentDoc: Document | ShadowRoot): {cssTexts:
   return { cssTexts, allProxyUrls };
 }
 
-function getCSSText(sheet: CSSStyleSheet | null): {cssText: string, proxyUrls: string[]} {
+function getCSSText(sheet: CSSStyleSheet | null, urlBase?: string): {cssText: string, proxyUrls: string[]} {
   const cssRules = sheet?.cssRules ?? [];
   let cssText = "";
-  const proxyUrls = [];
+  const proxyUrls: string[] = [];
   for (let i = 0; i < cssRules.length; i++) {
-    const urls = cssRules[i].cssText.match(URL_MATCHER);
-    if (urls) proxyUrls.push(...urls);
-    cssText += `${cssRules[i].cssText} `;
+    let ruleCssText = cssRules[i].cssText;
+    const urls = ruleCssText.match(URL_MATCHER);
+    if (urls) {
+      for (const matchedUrl of urls) {
+        let proxyUrl = matchedUrl;
+        const rawUrl = sanitizeUrlsInCssStr([matchedUrl])[0];
+        if (urlBase && rawUrl
+          && !rawUrl.startsWith("#")
+          && !rawUrl.startsWith("data:")
+          && !rawUrl.startsWith("blob:")) {
+          try {
+            const absoluteUrl = new URL(rawUrl, urlBase).href;
+            proxyUrl = `url("${absoluteUrl}")`;
+            ruleCssText = ruleCssText.replace(matchedUrl, proxyUrl);
+          } catch (e) {
+            // Preserve malformed URLs exactly as the browser exposed them.
+          }
+        }
+        proxyUrls.push(proxyUrl);
+      }
+    }
+    cssText += `${ruleCssText} `;
   }
   return { cssText, proxyUrls };
 }
