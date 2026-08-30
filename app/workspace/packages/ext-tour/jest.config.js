@@ -4,4 +4,5 @@ module.exports = {
   moduleNameMapper: {
     "^nanoid$": "<rootDir>/test-support/nanoid.js",
   },
+  setupFilesAfterEnv: ["<rootDir>/test-support/setup.js"],
 };
