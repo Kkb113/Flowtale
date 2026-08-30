@@ -1,0 +1,24 @@
+{
+	"folders": [
+		{
+			"name": "client",
+			"path": "workspace/packages/client"
+		},
+		{
+			"name": "common",
+			"path": "workspace/packages/common"
+		},
+		{
+			"name": "ext-tour",
+			"path": "workspace/packages/ext-tour"
+		}
+	],
+	"settings": {
+		"editor.fontSize": 13,
+		"editor.fontFamily": "Jetbrains Mono",
+		"editor.fontLigatures": true,
+		"editor.codeActionsOnSave": {
+			"source.fixAll.eslint": "always"
+		}
+	}
+}

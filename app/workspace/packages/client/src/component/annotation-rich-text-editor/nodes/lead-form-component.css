@@ -1,0 +1,140 @@
+.LeadForm__container {
+  border: 1px solid #eee;
+  background-color: #fcfcfc;
+  border-radius: 10px;
+  width: 260px;
+  cursor: pointer;
+  user-select: none;
+}
+.LeadForm__container.focused {
+  outline: 2px solid rgb(60, 132, 244);
+}
+.LeadForm__inner {
+  margin: 15px;
+  cursor: default;
+}
+.LeadForm__optionContainer {
+  display: flex;
+  flex-direction: row;
+  margin-bottom: 10px;
+  align-items: center;
+  position: relative;
+}
+.LeadForm__optionInputWrapper {
+  display: flex;
+  flex: 10px;
+  border: 1px solid rgb(61, 135, 245);
+  border-radius: 5px;
+  position: relative;
+  overflow: hidden;
+  cursor: pointer;
+}
+.LeadForm__optionInput {
+  display: flex;
+  flex: 1px;
+  border: 0px;
+  padding: 7px;
+  color: rgb(61, 135, 245);
+  background-color: transparent;
+  font-weight: bold;
+  outline: 0px;
+  z-index: 0;
+}
+.LeadForm__optionInput::placeholder {
+  font-weight: normal;
+  color: #999;
+}
+.LeadForm__optionDelete {
+  position: relative;
+  display: flex;
+  width: 28px;
+  height: 28px;
+  margin-left: 6px;
+  border: 0px;
+  background-color: transparent;
+  background-position: 6px 6px;
+  background-repeat: no-repeat;
+  z-index: 0;
+  cursor: pointer;
+  border-radius: 5px;
+  opacity: 0.3;
+}
+.LeadForm__optionDelete:before,
+.LeadForm__optionDelete:after {
+  position: absolute;
+  display: block;
+  content: '';
+  background-color: #999;
+  width: 2px;
+  height: 15px;
+  top: 6px;
+  left: 13px;
+}
+.LeadForm__optionDelete:before {
+  transform: rotate(-45deg);
+}
+.LeadForm__optionDelete:after {
+  transform: rotate(45deg);
+}
+.LeadForm__optionDelete:hover {
+  opacity: 1;
+  background-color: #eee;
+}
+.LeadForm__optionDeleteDisabled {
+  cursor: not-allowed;
+}
+.LeadForm__optionDeleteDisabled:hover {
+  opacity: 0.3;
+  background-color: transparent;
+}
+.LeadForm__footer {
+  padding: 0 0.25rem;
+  justify-content: space-between;
+  align-items: center;
+  display: flex;
+}
+
+.lead-form-tooltip p {
+  font-size: 14px;
+}
+
+.lead-form-tooltip .select {
+  color: #000;
+  background: #eaeaea;
+  padding: 2px 6px;
+}
+
+.lead-form-options-popover {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.5rem;
+  flex-direction: column;
+}
+
+.lead-form-options-popover .option {
+  padding: 0.5rem;
+  border: 1px solid lightgray;
+  border-radius: 8px;
+  transition: all 0.15s ease-in-out;
+}
+
+.lead-form-options-popover .option:hover {
+  background-color: rgba(0, 0, 0, 0.1);
+  cursor: pointer;
+}
+
+.ant-popover-title .sub {
+  font-size: 11px;
+  font-weight: 400;
+  opacity: 0.74;
+  width: 240px;
+  line-height: 0.95rem;
+  margin: 4px 0;
+}
+
+
+.our-radio-lead-form-hover:hover {
+  background: #F5F5F5;
+  border-radius: 4px;
+  transition: background 0.2s linear;
+}

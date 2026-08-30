@@ -1,0 +1,24 @@
+{
+  "status": "Issued",
+  "cluster": "proxy1.app.sharefable.com",
+  "records": [
+    {
+      "recordType": "CNAME",
+      "recordDes": "Verification record",
+      "recordKey": "_dbade64137a2c679e0633aa7d05ce896.yjbn-media.com.",
+      "recordValue": "_9f4b5311d83ffa1dad2a27310e2496f7.sdgjtdhdhz.acm-validations.aws."
+    },
+    {
+      "recordType": "CNAME",
+      "recordDes": "Subdomain record",
+      "recordKey": "recording",
+      "recordValue": "dclz0y3ksvoii.cloudfront.net"
+    }
+  ],
+  "deployedOn": "AWS_AMPLIFY",
+  "domainName": "recording.yjbn-media.com",
+  "createdAt": 1716627030891,
+  "rejectionReason": null
+}
+
+

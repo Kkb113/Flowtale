@@ -1,0 +1,70 @@
+### refresh settings
+POST https://api.service.sharefable.com/v1/refreshsettings
+Content-Type: application/json
+
+### add platform integration config -- webhook
+# format of config is
+# {
+#   cv -> current version that is the latest version
+#   v  -> all the versioned config in an array that can be indexed by cv
+# }
+# first element is in the v array is null as cv starts with 1
+# for ease of reading [v]ersion is added in every versioned config
+POST {{api-host}}/v1/ide/platform_integration
+Content-Type: application/json
+
+{
+  "type": "FableWebhook",
+  "name": "Webhook",
+  "icon": "/webhook.png",
+  "description": "Post event data from Fable to your Webhook",
+  "disabled": false,
+  "config": {
+    "cv": 1,
+    "v": [
+      null,
+      {
+        "v": 1,
+        "config": {
+          "events": [
+            "CREATE_OR_UPDATE_CONTACT"
+          ]
+        }
+      }
+    ]
+  }
+}
+
+### add platform integration config -- zapier
+# format of config is
+# {
+#   cv -> current version that is the latest version
+#   v  -> all the versioned config in an array that can be indexed by cv
+# }
+# first element is in the v array is null as cv starts with 1
+# for ease of reading [v]ersion is added in every versioned config
+POST {{api-host}}/v1/ide/platform_integration
+Content-Type: application/json
+
+{
+  "type": "Zapier",
+  "name": "Zapier",
+  "icon": "/zapier.png",
+  "description": "Trigger a zap whenever an event happens inside Fable",
+  "disabled": false,
+  "config": {
+    "cv": 1,
+    "v": [
+      null,
+      {
+        "v": 1,
+        "config": {
+          "events": [
+            "CREATE_OR_UPDATE_CONTACT"
+          ]
+        }
+      }
+    ]
+  }
+}
+

@@ -1,0 +1,54 @@
+{
+  "manifest_version": 3,
+  "name": "Fable: Create step-by-step interactive demos and guides in 5 minutes.",
+  "author": "fable",
+  "version": "2.1.9",
+  "description": "Capture your product in minutes to build interactive guides and demos with Fable.",
+  "icons": {
+    "16": "logo_16.png",
+    "24": "logo_24.png",
+    "32": "logo_32.png",
+    "64": "logo_64.png",
+    "128": "logo_128.png"
+  },
+  "commands": {
+    "save-screen": {
+      "suggested_key": {
+        "default": "Ctrl+E",
+        "mac": "Command+E"
+      },
+      "description": "Save the current screen in selected project"
+    }
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_popup": "popup.html"
+  },
+  "permissions": [
+    "tabs",
+    "scripting",
+    "storage",
+    "webNavigation",
+    "cookies",
+    "unlimitedStorage"
+  ],
+  "optional_host_permissions": [
+    "*://*/*"
+  ],
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'self'"
+  },
+  "host_permissions": [
+    "<all_urls>",
+    "*://*/*"
+  ],
+  "externally_connectable": {
+    "matches": [
+      "http://localhost:3000/*",
+      "https://*.sharefable.com/*",
+      "https://*.staging.sharefable.com/*"
+    ]
+  }
+}

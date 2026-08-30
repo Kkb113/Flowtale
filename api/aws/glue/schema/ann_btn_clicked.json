@@ -1,0 +1,56 @@
+[
+  {
+    "Name": "aid",
+    "Type": "string",
+    "Comment": "anonymous_user_id"
+  },
+  {
+    "Name": "sid",
+    "Type": "string",
+    "Comment": "session_id"
+  },
+  {
+    "Name": "uts",
+    "Type": "int",
+    "Comment": ""
+  },
+  {
+    "Name": "tz",
+    "Type": "string",
+    "Comment": "Timezone w.r.t utc"
+  },
+  {
+    "Name": "payload_btn_id",
+    "Type": "string",
+    "Comment": ""
+  },
+  {
+    "Name": "payload_btn_type",
+    "Type": "string",
+    "Comment": ""
+  },
+  {
+    "Name": "ymd",
+    "Type": "int",
+    "Comment": "",
+    "PartitionKey": "Partition (0)"
+  },
+  {
+    "Name": "h",
+    "Type": "int",
+    "Comment": "",
+    "PartitionKey": "Partition (1)"
+  },
+  {
+    "Name": "payload_tour_id",
+    "Type": "bigint",
+    "Comment": "",
+    "PartitionKey": "Partition (2)"
+  },
+  {
+    "Name": "payload_ann_id",
+    "Type": "string",
+    "Comment": "",
+    "PartitionKey": "Partition (3)"
+  }
+]

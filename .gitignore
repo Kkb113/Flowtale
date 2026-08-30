@@ -1,0 +1,6 @@
+# Root monorepo hygiene
+.git-migration-backups/
+
+# Local HTTP-client request scratchpad. It contains expired signed URLs and
+# credential-shaped examples that should not be republished in this repository.
+api/dev/api.http

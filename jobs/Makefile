@@ -1,0 +1,71 @@
+.PHONY: run env container-run containerize update-contract
+
+include env.now
+
+update-contract:
+	cp -r ../api/gen/api-contract.d.ts ./src/api-contract.ts
+
+gen:
+	cp -r src/http/contract.ts ../app/workspace/packages/common/src/jobs-contract.ts
+	node scripts/gen-json-schema.js
+	mkdir -p ../app/workspace/packages/common/src/llm-fn-schema/ && rm -f ../app/workspace/packages/common/src/llm-fn-schema/*
+	cp src/json-schema/*.ts ../app/workspace/packages/common/src/llm-fn-schema/
+	mkdir -p ../app/workspace/packages/common/src/llm-contract
+	cp -r src/http/llm-ops/contract/index.ts ../app/workspace/packages/common/src/llm-contract/index.ts
+
+run:
+	yarn build && yarn start | npx pino-pretty
+
+purge-queue:
+	aws sqs purge-queue \
+		--queue-url https://sqs.ap-south-1.amazonaws.com/556055615522/tour_app_queue
+
+test-run-job:
+	aws sqs send-message \
+		--queue-url https://sqs.ap-south-1.amazonaws.com/556055615522/tour_app_queue \
+		--message-body 'SUBS_UPGRADE_DOWNGRADE_SIDE_EFFECT' \
+		--message-attributes '{"orgIdStr": {"DataType": "String", "StringValue": "49"}, "beforePlan": {"DataType": "String", "StringValue": "SOLO"}, "afterPlan": {"DataType": "String", "StringValue": "BUSINESS"} }'
+
+***REMOVED*** --------------------------------------------------------------
+***REMOVED*** Different env file is required for different tool. Like idea
+***REMOVED*** needs env file in a different format which could be loaded via
+***REMOVED*** env plugin. This commands generate those file format.
+***REMOVED*** This is the first command that needs to be ran
+***REMOVED*** --------------------------------------------------------------
+env:
+	@echo "Generating env file"
+
+	@if [ "$(staging)" ]; then \
+        cp env.staging env.now; \
+        echo "[staging]"; \
+    elif [ "$(dev)" ]; then \
+        cp env.dev env.now; \
+        echo "[dev]"; \
+    elif [ "$(prod)" ]; then \
+        cp env.prod env.now; \
+        echo "[PROD]"; \
+    else \
+        echo "Not known. Allowed [staging, dev, prod]"; \
+    fi
+
+containerize: export SERVICE_NAME=`jq -r '.SERVICE_NAME' service.json`
+containerize: export AWS_ORG=`aws sts get-caller-identity --query "Account" --output text`
+containerize: export AWS_REGION=ap-southeast-1
+containerize: export ECR_IMAGE_TAG=$(AWS_ORG).dkr.ecr.$(AWS_REGION).amazonaws.com/$(SERVICE_NAME):$(v)
+containerize:
+	@if [ -z "$(v)" ]; then \
+        echo "[v]ersion is mandatory. Usage: make containerize v=2.1.0"; \
+        false ; \
+	fi
+	@echo "ECR tag: $(ECR_IMAGE_TAG)"
+	docker build -t $(SERVICE_NAME) -t $(ECR_IMAGE_TAG) .
+	aws ecr get-login-password --region $(AWS_REGION) | docker login --username AWS --password-stdin $(AWS_ORG).dkr.ecr.$(AWS_REGION).amazonaws.com
+	docker push $(ECR_IMAGE_TAG)
+
+***REMOVED*** README If you are running this in local make sure in env.dev file
+***REMOVED*** DB_CONN_URL=host.docker.internal is set otherwise the db won't be reachable via the docker network
+container-run: export SERVICE_NAME=`jq -r '.SERVICE_NAME' service.json`
+container-run:
+	@echo "Generating env file for this run"
+	sed -r 's/^export[[:space:]]+//' env.now > env.dkr
+	docker rm sqs-jobs; docker run --name sqs-jobs --env-file env.dkr -p 8081:8081 ${SERVICE_NAME}

@@ -1,0 +1,107 @@
+{
+  "env": {
+    "browser": true,
+    "es6": true,
+    "jest/globals": true
+  },
+  "extends": [
+    "airbnb"
+  ],
+  "globals": {
+    "Atomics": "readonly",
+    "SharedArrayBuffer": "readonly",
+    "chrome": "readonly",
+    "screen": "readonly"
+  },
+  "parser": "@typescript-eslint/parser",
+  "parserOptions": {
+    "ecmaFeatures": {
+      "jsx": true
+    },
+    "ecmaVersion": 2018,
+    "sourceType": "module"
+  },
+  "overrides": [
+    {
+      "files": [
+        ",*.ts",
+        "*.tsx"
+      ],
+      "rules": {
+        "no-undef": "off"
+      }
+    }
+  ],
+  "plugins": [
+    "react",
+    "@typescript-eslint",
+    "jest"
+  ],
+  "rules": {
+    "no-shadow": "off",
+    "@typescript-eslint/no-shadow": "error",
+    "import/no-extraneous-dependencies": "off",
+    "import/prefer-default-export": "off",
+    "no-sequences": "off",
+    "max-classes-per-file": "off",
+    "import/no-unresolved": "off",
+    "import/extensions": "off",
+    "react/jsx-filename-extension": [
+      1,
+      {
+        "extensions": [
+          ".tsx"
+        ]
+      }
+    ],
+    "react/jsx-wrap-multilines": "off",
+    "prefer-destructuring": "off",
+    "react/destructuring-assignment": "off",
+    "no-underscore-dangle": "off",
+    "react/no-array-index-key": "off",
+    "camelcase": "off",
+    "react/require-default-props": "off",
+    "no-unused-vars": "off",
+    "no-use-before-define": "off",
+    "no-await-in-loop": "off",
+    "no-unused-expressions": "off",
+    "jsx-a11y/media-has-caption": "off",
+    "jsx-a11y/anchor-is-valid": "off",
+    "jsx-a11y/no-static-element-interactions": "off",
+    "jsx-a11y/click-events-have-key-events": "off",
+    "react/no-unescaped-entities": "off",
+    "react/sort-comp": "off",
+    "arrow-parens": "off",
+    "object-curly-newline": "off",
+    "no-nested-ternary": "off",
+    "comma-dangle": "off",
+    "no-cond-assign": "off",
+    "no-plusplus": "off",
+    "no-return-assign": "off",
+    "max-len": [
+      "warn",
+      {
+        "code": 120
+      }
+    ],
+    "no-restricted-syntax": 0,
+    "func-names": 0,
+    "no-continue": 0,
+    "no-multi-assign": 0,
+    "no-param-reassign": 0,
+    "no-bitwise": 0,
+    "no-constant-condition": 0,
+    "react/jsx-one-expression-per-line": "off"
+  },
+  "settings": {
+    "import/resolver": {
+      "node": {
+        "extensions": [
+          ".js",
+          ".ts",
+          ".tsx"
+        ]
+      }
+    }
+  }
+}

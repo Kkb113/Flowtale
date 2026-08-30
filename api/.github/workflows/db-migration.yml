@@ -1,0 +1,90 @@
+name: DB Migration
+
+on:
+  push:
+    branches: [ develop, master ]
+    paths:
+      - 'schema/api/**'
+      - 'schema/analytics/**'
+  workflow_dispatch:
+    inputs:
+      deploy_env:
+        type: environment
+        description: Deployment environment?
+        required: true
+
+env:
+  DEPLOY_ENV: ${{ github.ref_name == 'master' && 'prod' ||  github.ref_name == 'develop' && 'staging' || 'na' }}
+
+jobs:
+  db-migration:
+    runs-on: ubuntu-latest
+    environment: ${{ github.ref_name == 'master' && 'prod' ||  github.ref_name == 'develop' && 'staging' || 'na' }}
+    permissions:
+      id-token: write
+      contents: read
+      issues: write
+
+    steps:
+      - name: Set up JDK 17
+        uses: actions/setup-java@v3
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+          server-id: github
+          settings-path: ${{ github.workspace }}
+
+      - name: Checkout Repository
+        uses: actions/checkout@v3
+
+      - name: Getting project version
+        id: version
+        run: |
+          echo "V=$(mvn -q -Dexec.executable=echo -Dexec.args='${project.version}' --non-recursive exec:exec)" >> $GITHUB_OUTPUT
+
+      - name: Printing version
+        run: |
+          echo "Running DB migration for v=${{ steps.version.outputs.V }} env=${{ env.DEPLOY_ENV }}"
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-region: us-east-1
+          role-to-assume: ${{ vars.AWS_ROLE_TO_ASSUME }}
+          role-session-name: app-deployment
+
+      - name: Manual approval
+        uses: trstringer/manual-approval@v1
+        timeout-minutes: 10
+        with:
+          secret: ${{ github.TOKEN }}
+          approvers: ${{vars.APPROVERS}}
+          minimum-approvals: 1
+          issue-title: |
+            Run DB schema migrate for v=${{ steps.version.outputs.V }} env=${{ env.DEPLOY_ENV }}
+          issue-body: |
+            Make sure the DB accepts connection to 3306 port from internet temporarily.
+            If you don't do this, the job would take a really long time and then timeout at the end.
+            
+            **Please approve or deny within 10 min.**
+
+      - name: Creating empty env file
+        run: touch env.now
+
+      - name: Feed env from parameter store
+        run: >
+          echo "export DB_USER=$(aws ssm get-parameter --region ${{ vars.DEFAULT_REGION }} --name "${{ env.DEPLOY_ENV }}.${{ vars.SSM_PROJ_API }}.DB_USER" --query 'Parameter.Value' --output text)" >> env.now &&
+          echo "export DB_CONN_URL_DOCKER=$(aws ssm get-parameter --region ${{ vars.DEFAULT_REGION }} --name "${{ env.DEPLOY_ENV }}.${{ vars.SSM_PROJ_API }}.DB_CONN_URL" --query 'Parameter.Value' --output text)" >> env.now &&
+          echo "export DB_PWD=\\$(aws ssm get-parameter --region ${{ vars.DEFAULT_REGION }} --name "${{ env.DEPLOY_ENV }}.${{ vars.SSM_PROJ_API }}.DB_PWD" --query 'Parameter.Value' --output text)" >> env.now &&
+          echo "export ANALYTICS_DB_USER=$(aws ssm get-parameter --region ${{ vars.DEFAULT_REGION }} --name "${{ env.DEPLOY_ENV }}.fable-analytics.ANALYTICS_DB_USER" --query 'Parameter.Value' --output text)" >> env.now &&
+          echo "export ANALYTICS_DB_CONN_URL_DOCKER=$(aws ssm get-parameter --region ${{ vars.DEFAULT_REGION }} --name "${{ env.DEPLOY_ENV }}.fable-analytics.ANALYTICS_DB_CONN_URL" --query 'Parameter.Value' --output text)" >> env.now &&
+          echo "export ANALYTICS_DB_PWD=\\$(aws ssm get-parameter --region ${{ vars.DEFAULT_REGION }} --name "${{ env.DEPLOY_ENV }}.fable-analytics.ANALYTICS_DB_PWD" --query 'Parameter.Value' --output text)" >> env.now
+
+      - name: Env file content
+        run: sed -n '1,2p;4,5p' env.now
+
+      - name: Running migration script
+        run: make db-schema-migrate
+
+      - run: |
+          echo "### :warning: Make sure that the DB is not accepting ipv4 traffic to port 3306 from internet." >> $GITHUB_STEP_SUMMARY

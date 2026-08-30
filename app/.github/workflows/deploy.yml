@@ -1,0 +1,160 @@
+name: Build and Deploy Ext and Client and Sentry Release
+
+on:
+  push:
+    branches: [master, develop]
+  workflow_dispatch:
+
+env:
+  DEPLOY_ENV: ${{ github.ref_name == 'master' && 'prod' ||  github.ref_name == 'develop' && 'staging' || 'staging' }}
+
+jobs:
+  build-and-deploy-ext-and-client:
+    runs-on: ubuntu-latest
+    environment: ${{ github.ref_name == 'master' && 'prod' ||  github.ref_name == 'develop' && 'staging' || 'staging' }}
+
+    permissions:
+      id-token: write
+      contents: read
+      issues: write
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v3
+        with: 
+          fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: 16
+
+      - name: Get Version Number
+        id: version
+        run: echo "version=$(node -p -e "require('./package.json').version")" >> $GITHUB_OUTPUT
+        working-directory: workspace/packages/ext-tour
+
+      - name: Manual approval
+        uses: trstringer/manual-approval@v1
+        timeout-minutes: 3
+        with:
+          secret: ${{ github.TOKEN }}
+          approvers: ${{vars.APPROVERS}} 
+          minimum-approvals: 1
+          issue-title: "deploy APP v${{ steps.version.outputs.version }} to ${{ env.DEPLOY_ENV }}"
+          issue-body: "Please approve or deny deployment of app with in 3 mins"
+
+      - name: Install Dependencies
+        run: yarn
+        working-directory: workspace
+
+      - name: Lint checks
+        run: yarn workspaces run lint
+        working-directory: workspace
+
+      - name: Static analysis -- Code duplication
+        run: yarn workspaces run dupdetect
+        working-directory: workspace
+
+      - name: Build Common
+        run: yarn build
+        working-directory: workspace/packages/common
+
+      - name: Build Extension
+        run: yarn build-${{env.DEPLOY_ENV}}
+        working-directory: workspace/packages/ext-tour
+
+      - name: Create Sentry release and upload sourcemap for extension
+        uses: getsentry/action-release@v1
+        env:
+          SENTRY_AUTH_TOKEN: ${{ vars.SENTRY_AUTH_TOKEN }}
+          SENTRY_ORG: ${{ vars.SENTRY_ORG }}
+          SENTRY_PROJECT: ${{ vars.SENTRY_EXTENSION_PROJECT }}
+        with:
+          environment: ${{env.DEPLOY_ENV}}
+          sourcemaps: ./workspace/packages/ext-tour/build
+          version: ${{ vars.SENTRY_EXTENSION_PROJECT }}@${{ steps.version.outputs.version }}
+          url_prefix: '~/'
+          ignore_missing: true
+        if: env.DEPLOY_ENV == 'prod'
+
+      - name: Remove map files from Extension build
+        run: |
+          cd workspace/packages/ext-tour/build
+          rm -rf *.map
+        if: env.DEPLOY_ENV == 'prod'
+
+      - name: Build Client
+        run: yarn build-${{env.DEPLOY_ENV}}
+        working-directory: workspace/packages/client
+
+      - name: Create Sentry release and upload sourcemap for client
+        uses: getsentry/action-release@v1
+        env:
+          SENTRY_AUTH_TOKEN: ${{ vars.SENTRY_AUTH_TOKEN }}
+          SENTRY_ORG: ${{ vars.SENTRY_ORG }}
+          SENTRY_PROJECT: ${{ vars.SENTRY_CLIENT_PROJECT }}
+        with:
+          environment: ${{env.DEPLOY_ENV}}
+          sourcemaps: ./workspace/packages/client/build
+          version: ${{ vars.SENTRY_CLIENT_PROJECT }}@${{ steps.version.outputs.version }}
+          url_prefix: '~/'
+          ignore_missing: true
+        if: env.DEPLOY_ENV == 'prod'
+
+      - name: Remove map files from Client build
+        run: |
+          cd workspace/packages/client/build
+          rm -rf static/js/*.map
+          rm -f static/css/*.map
+        if: env.DEPLOY_ENV == 'prod'
+
+      - name: Zip Extension
+        run: zip -r extension-${{ steps.version.outputs.version }}.zip build
+        working-directory: workspace/packages/ext-tour
+
+      - name: 'Upload extension to github'
+        uses: actions/upload-artifact@v4
+        with:
+          name: extension-${{ steps.version.outputs.version }}-${{env.DEPLOY_ENV}}
+          path: workspace/packages/ext-tour/extension-${{ steps.version.outputs.version }}.zip
+          retention-days: 7
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-region: us-east-1
+          role-to-assume: ${{ vars.AWS_ROLE_TO_ASSUME }}
+          role-session-name: app-deployment
+
+      - name: Upload the extension to S3
+        run: aws s3 cp extension-${{ steps.version.outputs.version }}.zip s3://${{ vars.EXT_BUCKET_NAME }}/ext-build/extension-${{ steps.version.outputs.version }}-${{env.DEPLOY_ENV}}.zip
+        working-directory: workspace/packages/ext-tour
+
+      - name: Upload the client to S3
+        run: aws s3 sync ./build s3://${{ vars.CLIENT_BUCKET_NAME }}
+        working-directory: workspace/packages/client
+
+      - name: Invalidation of cloudfront cache
+        run: aws cloudfront create-invalidation --distribution-id ${{ vars.CF_DIST_ID }} --paths '/*';
+
+      - name: Zip Client Directory
+        run: zip -r client-arch-latest.zip .
+        working-directory: workspace/packages/client/build
+        if: env.DEPLOY_ENV == 'prod'
+
+      - name: Upload the client zip to S3 for amplify to reuse
+        run: aws s3 cp client-arch-latest.zip s3://${{ vars.ARCHIVE_BUCKET_NAME }}/client-arch-latest.zip
+        working-directory: workspace/packages/client/build
+        if: env.DEPLOY_ENV == 'prod'
+
+      - name: Create deployments in amplify
+        run: |
+          ids="${{ vars.AMPLIFY_PROXY_DEPLOYMENT_FOR_CUSTOM_DOMAIN }}"
+          arr=(${ids//,/ })
+          for id in "${arr[@]}"; do
+            aws amplify start-deployment --app-id ${id} --branch-name master --source-url https://s3.us-east-2.amazonaws.com/${{ vars.ARCHIVE_BUCKET_NAME }}/client-arch-latest.zip --region us-east-2;
+          done
+        working-directory: workspace/packages/client/build
+        if: env.DEPLOY_ENV == 'prod'
+

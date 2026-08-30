@@ -1,0 +1,23 @@
+{
+  "name": "migration_scripts",
+  "version": "1.0.0",
+  "main": "",
+  "license": "MIT",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "build": "tsc",
+    "migrate-publish-demo": "yarn build && node dist/publish.js",
+    "migrate-multi-org": "node user_org_join.js",
+    "migrate-assign-createdby": "node assign_created_by_for_org.js"
+  },
+  "devDependencies": {
+    "@types/mysql": "^2.15.22",
+    "@types/node": "^20.7.1",
+    "@aws-sdk/client-s3": "^3.354.0",
+    "typescript": "^5.2.2"
+  },
+  "dependencies": {
+    "deepcopy": "^2.1.0",
+    "mysql": "^2.18.1"
+  }
+}

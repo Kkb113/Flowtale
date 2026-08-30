@@ -1,0 +1,408 @@
+{
+  "no_of_demos": {
+    "plans": [
+      {
+        "test": "count",
+        "value": "<=1",
+        "plan": "SOLO"
+      },
+      {
+        "test": "count",
+        "value": ">=1",
+        "plan": "*"
+      }
+    ]
+  },
+  "no_of_creator": {
+    "plans": [
+      {
+        "test": "count",
+        "value": "<=3",
+        "plan": "LIFETIME_TIER2"
+      },
+      {
+        "test": "count",
+        "value": ">=1",
+        "plan": "LIFETIME_TIER3"
+      },
+      {
+        "test": "count",
+        "value": ">=1",
+        "plan": "LIFETIME_TIER4"
+      },
+      {
+        "test": "count",
+        "value": ">=1",
+        "plan": "LIFETIME_TIER5"
+      },
+      {
+        "test": "count",
+        "value": "<=1",
+        "plan": "*"
+      }
+    ]
+  },
+  "analytics": {
+    "plans": [
+      {
+        "test": "text",
+        "value": [
+          "advanced"
+        ],
+        "plan": "BUSINESS"
+      },
+      {
+        "test": "text",
+        "value": [
+          "advanced"
+        ],
+        "plan": "LIFETIME_TIER3"
+      },
+      {
+        "test": "text",
+        "value": [
+          "advanced"
+        ],
+        "plan": "LIFETIME_TIER4"
+      },
+      {
+        "test": "text",
+        "value": [
+          "advanced"
+        ],
+        "plan": "LIFETIME_TIER5"
+      },
+      {
+        "test": "text",
+        "value": [
+          "basic"
+        ],
+        "plan": "*"
+      }
+    ]
+  },
+  "modules": {
+    "plans": [
+      {
+        "test": "switch",
+        "value": "off",
+        "plan": "SOLO"
+      },
+      {
+        "test": "switch",
+        "value": "off",
+        "plan": "LIFETIME_TIER1"
+      },
+      {
+        "test": "switch",
+        "value": "on",
+        "plan": "*"
+      }
+    ]
+  },
+  "custom_webhooks": {
+    "plans": [
+      {
+        "test": "switch",
+        "value": "off",
+        "plan": "SOLO"
+      },
+      {
+        "test": "switch",
+        "value": "on",
+        "plan": "*"
+      }
+    ]
+  },
+  "cta_buttons": {
+    "plans": [
+      {
+        "test": "switch",
+        "value": "on",
+        "plan": "*"
+      }
+    ]
+  },
+  "custom_lead_form": {
+    "plans": [
+      {
+        "test": "switch",
+        "value": "on",
+        "plan": "BUSINESS"
+      },
+      {
+        "test": "switch",
+        "value": "on",
+        "plan": "LIFETIME_TIER3"
+      },
+      {
+        "test": "switch",
+        "value": "on",
+        "plan": "LIFETIME_TIER4"
+      },
+      {
+        "test": "switch",
+        "value": "on",
+        "plan": "LIFETIME_TIER5"
+      },
+      {
+        "test": "switch",
+        "value": "off",
+        "plan": "*"
+      }
+    ]
+  },
+  "integration": {
+    "plans": [
+      {
+        "test": "text",
+        "value": [
+          "*"
+        ],
+        "plan": "BUSINESS"
+      },
+      {
+        "test": "text",
+        "value": [
+          "hubspot",
+          "Zapier",
+          "FableWebhook"
+        ],
+        "plan": "LIFETIME_TIER3"
+      },
+      {
+        "test": "text",
+        "value": [
+          "hubspot",
+          "Zapier",
+          "FableWebhook"
+        ],
+        "plan": "LIFETIME_TIER4"
+      },
+      {
+        "test": "text",
+        "value": [
+          "hubspot",
+          "Zapier",
+          "FableWebhook"
+        ],
+        "plan": "LIFETIME_TIER5"
+      },
+      {
+        "test": "text",
+        "value": [
+          "Zapier",
+          "FableWebhook"
+        ],
+        "plan": "LIFETIME_TIER2"
+      },
+      {
+        "test": "text",
+        "value": [
+          "FableWebhook"
+        ],
+        "plan": "LIFETIME_TIER1"
+      },
+      {
+        "test": "text",
+        "value": [
+          "FableWebhook"
+        ],
+        "plan": "STARTUP"
+      },
+      {
+        "test": "text",
+        "value": [],
+        "plan": "*"
+      }
+    ]
+  },
+  "multi_annontation": {
+    "plans": [
+      {
+        "test": "switch",
+        "value": "on",
+        "plan": "BUSINESS"
+      },
+      {
+        "test": "switch",
+        "value": "off",
+        "plan": "*"
+      }
+    ]
+  },
+  "annotation": {
+    "plans": [
+      {
+        "test": "text",
+        "value": [
+          "video",
+          "audio"
+        ],
+        "plan": "BUSINESS"
+      },
+      {
+        "test": "text",
+        "value": [
+          "video",
+          "audio"
+        ],
+        "plan": "LIFETIME_TIER1"
+      },
+      {
+        "test": "text",
+        "value": [
+          "video",
+          "audio"
+        ],
+        "plan": "LIFETIME_TIER2"
+      },
+      {
+        "test": "text",
+        "value": [
+          "video",
+          "audio"
+        ],
+        "plan": "LIFETIME_TIER3"
+      },
+      {
+        "test": "text",
+        "value": [
+          "video",
+          "audio"
+        ],
+        "plan": "LIFETIME_TIER4"
+      },
+      {
+        "test": "text",
+        "value": [
+          "video",
+          "audio"
+        ],
+        "plan": "LIFETIME_TIER5"
+      },
+      {
+        "test": "text",
+        "value": [
+          "text"
+        ],
+        "plan": "*"
+      }
+    ]
+  },
+  "edit_and_personalize_demo": {
+    "plans": [
+      {
+        "test": "text",
+        "value": [
+          "*"
+        ],
+        "plan": "BUSINESS"
+      },
+      {
+        "test": "text",
+        "value": [
+          "blur",
+          "show_hide"
+        ],
+        "plan": "STARTUP"
+      },
+      {
+        "test": "text",
+        "value": [
+          "*"
+        ],
+        "plan": "LIFETIME_TIER3"
+      },
+      {
+        "test": "text",
+        "value": [
+          "*"
+        ],
+        "plan": "LIFETIME_TIER4"
+      },
+      {
+        "test": "text",
+        "value": [
+          "*"
+        ],
+        "plan": "LIFETIME_TIER5"
+      },
+      {
+        "test": "text",
+        "value": [
+          "blur",
+          "show_hide"
+        ],
+        "plan": "LIFETIME_TIER2"
+      },
+      {
+        "test": "text",
+        "value": [],
+        "plan": "*"
+      }
+    ]
+  },
+  "domain_for_sharing": {
+    "plans": [
+      {
+        "test": "count",
+        "value": "<=1",
+        "plan": "LIFETIME_TIER1"
+      },
+      {
+        "test": "count",
+        "value": "<=3",
+        "plan": "LIFETIME_TIER2"
+      },
+      {
+        "test": "count",
+        "value": "<=10",
+        "plan": "LIFETIME_TIER3"
+      },
+      {
+        "test": "count",
+        "value": "<=25",
+        "plan": "LIFETIME_TIER4"
+      },
+      {
+        "test": "count",
+        "value": "<=60",
+        "plan": "LIFETIME_TIER5"
+      },
+      {
+        "test": "count",
+        "value": ">=0",
+        "plan": "*"
+      }
+    ]
+  },
+  "no_watermark": {
+    "plans": [
+      {
+        "test": "switch",
+        "value": "off",
+        "plan": "SOLO"
+      },
+      {
+        "test": "switch",
+        "value": "on",
+        "plan": "*"
+      }
+    ]
+  },
+  "custom_demo_loader": {
+    "plans": [
+      {
+        "test": "switch",
+        "value": "off",
+        "plan": "SOLO"
+      },
+      {
+        "test": "switch",
+        "value": "on",
+        "plan": "*"
+      }
+    ]
+  }
+}

@@ -1,0 +1,300 @@
+name: Build and install code in ECR
+
+on:
+  workflow_dispatch:
+    inputs:
+      deploy_env:
+        type: environment
+        description: Deployment environment?
+        required: true
+
+jobs:
+  build-and-install:
+    runs-on: ubuntu-latest
+    environment: ${{ github.event.inputs.deploy_env }}
+    permissions:
+      id-token: write
+      contents: read
+      issues: write
+
+    steps:
+      - name: Set up JDK 17
+        uses: actions/setup-java@v3
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+          server-id: github
+          settings-path: ${{ github.workspace }}
+
+      - name: Setup jq
+        uses: dcarbone/install-jq-action@v1.0.1
+
+      - name: 'Check jq'
+        run: |
+          which jq
+          jq --version         
+
+      - name: Checkout Repository
+        uses: actions/checkout@v3
+
+      - name: Getting project version
+        id: version
+        run: |
+          echo "V=$(mvn -q -Dexec.executable=echo -Dexec.args='${project.version}' --non-recursive exec:exec)" >> $GITHUB_OUTPUT
+
+      - name: Printing version
+        run: |
+          echo "Builing for v=${{ steps.version.outputs.V }} env=${{ github.event.inputs.deploy_env }} branch=${{github.ref}}"
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-region: us-east-1
+          role-to-assume: ${{ vars.AWS_ROLE_TO_ASSUME }}
+          role-session-name: app-deployment
+
+      - name: Manual approval
+        uses: trstringer/manual-approval@v1
+        timeout-minutes: 3
+        with:
+          secret: ${{ github.TOKEN }}
+          approvers: ${{vars.APPROVERS}}
+          minimum-approvals: 1
+          issue-title: |
+            Build and install v=${{ steps.version.outputs.V }} env=${{ github.event.inputs.deploy_env }} in ECR
+          issue-body: |
+            Make sure the server version in pom.xml is updated
+            **Please approve or deny within 3 min.**
+
+
+      - name: Checking if tag is present in ecr
+        run: >
+          if aws ecr describe-images --repository-name fable-api --region ap-southeast-1 --query 'sort_by(imageDetails,& imagePushedAt)[*].imageTags[]' | grep -q ${{ steps.version.outputs.V }}; then
+            echo "::error::Image ${{ steps.version.outputs.V }} already present in registry. Update version in pom.xml"; exit 1
+          else
+            echo "Image not found in registry. Will create a new tag with ${{ steps.version.outputs.V }}"
+          fi
+
+      - name: Creating empty env file
+        run: touch env.now
+
+      - name: Containerize build & install
+        run: |
+          make containerize v=${{ steps.version.outputs.V }}
+
+      - name: notify slack failure
+        uses: slackapi/slack-github-action@v1.24.0
+        if: ${{ failure() }}
+        with:
+          channel-id: ${{vars.SLACK_CHANNEL_ID}}
+          payload: |
+            {
+            	"blocks": [
+            		{
+            			"type": "header",
+            			"text": {
+            				"type": "plain_text",
+            				"text": ":red_circle: api v1.1.3",
+            				"emoji": true
+            			}
+            		},
+            		{
+            			"type": "section",
+            			"text": {
+            				"type": "mrkdwn",
+            				"text": "Failed to publish image to registry. Check pipeline log."
+            			},
+            			"accessory": {
+            				"type": "button",
+            				"text": {
+            					"type": "plain_text",
+            					"text": ":octocat: Pipeline",
+            					"emoji": true
+            				},
+            				"url": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+            			}
+            		}
+            	]
+            }
+        env:
+          SLACK_WEBHOOK_URL: ${{vars.SLACK_FEEDBACK_WEBHOOK}}
+          SLACK_WEBHOOK_TYPE: INCOMING_WEBHOOK
+
+      - name: notify slack success
+        uses: slackapi/slack-github-action@v1.24.0
+        with:
+          channel-id: ${{vars.SLACK_CHANNEL_ID}}
+          payload: |
+            {
+            	"blocks": [
+            		{
+            			"type": "header",
+            			"text": {
+            				"type": "plain_text",
+            				"text": ":large_green_circle: api v${{ steps.version.outputs.V }}",
+            				"emoji": true
+            			}
+            		},
+            		{
+            			"type": "section",
+            			"text": {
+            				"type": "mrkdwn",
+            				"text": "Image successfully uploaded to ECR. Please perform manual deployment in ECS."
+            			},
+            			"accessory": {
+            				"type": "button",
+            				"text": {
+            					"type": "plain_text",
+            					"text": ":octocat: Pipeline",
+            					"emoji": true
+            				},
+            				"url": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+            			}
+            		},
+            		{
+            			"type": "section",
+            			"text": {
+            				"type": "mrkdwn",
+            				"text": "Deployment checklist\n• Have env vars been changed (added/deleted/updated) ? - If no skip\n\t ▹ Make changes to _Vault_\n\t ▹ Make changes to env variables in _ECS Task Definition_\n• Upgrade version in _ECS Task Definition_\n• Deploy the updated task in _ECS Cluster_"
+            			}
+            		},
+            		{
+            			"type": "divider"
+            		},
+            		{
+            			"type": "rich_text",
+            			"elements": [
+            				{
+            					"type": "rich_text_section",
+            					"elements": [
+            						{
+            							"type": "text",
+            							"text": "Common infra",
+            							"style": {
+            								"bold": true
+            							}
+            						}
+            					]
+            				}
+            			]
+            		},
+            		{
+            			"type": "actions",
+            			"elements": [
+            				{
+            					"type": "button",
+            					"text": {
+            						"type": "plain_text",
+            						"text": ":aws: ECR",
+            						"emoji": true
+            					},
+            					"url": "https://ap-southeast-1.console.aws.amazon.com/ecr/repositories/private/556055615522/fable-api?region=ap-southeast-1"
+            				}
+            			]
+            		},
+            		{
+            			"type": "rich_text",
+            			"elements": [
+            				{
+            					"type": "rich_text_section",
+            					"elements": [
+            						{
+            							"type": "text",
+            							"text": "Staging",
+            							"style": {
+            								"bold": true
+            							}
+            						}
+            					]
+            				}
+            			]
+            		},
+            		{
+            			"type": "actions",
+            			"elements": [
+            				{
+            					"type": "button",
+            					"text": {
+            						"type": "plain_text",
+            						"text": ":aws: Vault",
+            						"emoji": true
+            					},
+            					"url": "https://ap-southeast-1.console.aws.amazon.com/systems-manager/parameters/?region=ap-southeast-1"
+            				},
+            				{
+            					"type": "button",
+            					"text": {
+            						"type": "plain_text",
+            						"text": ":aws: ECS Task Definition",
+            						"emoji": true
+            					},
+            					"url": "https://ap-southeast-1.console.aws.amazon.com/ecs/v2/task-definitions/fable_api-staging?status=ACTIVE&region=ap-southeast-1"
+            				},
+            				{
+            					"type": "button",
+            					"text": {
+            						"type": "plain_text",
+            						"text": ":aws: ECS Service",
+            						"emoji": true
+            					},
+            					"url": "https://ap-southeast-1.console.aws.amazon.com/ecs/v2/clusters/fbl_cluster-staging/services/fbl_api-staging/health?region=ap-southeast-1"
+            				}
+            			]
+            		},
+            		{
+            			"type": "rich_text",
+            			"elements": [
+            				{
+            					"type": "rich_text_section",
+            					"elements": [
+            						{
+            							"type": "text",
+            							"text": "Prod",
+            							"style": {
+            								"bold": true
+            							}
+            						}
+            					]
+            				}
+            			]
+            		},
+            		{
+            			"type": "actions",
+            			"elements": [
+            				{
+            					"type": "button",
+            					"text": {
+            						"type": "plain_text",
+            						"text": ":aws-prod: Vault",
+            						"emoji": true
+            					},
+            					"url": "https://us-east-2.console.aws.amazon.com/systems-manager/parameters?region=us-east-2"
+            				},
+            				{
+            					"type": "button",
+            					"text": {
+            						"type": "plain_text",
+            						"text": ":aws-prod: ECS Task Definition",
+            						"emoji": true
+            					},
+            					"url": "https://us-east-2.console.aws.amazon.com/ecs/v2/task-definitions/api-prod?status=ACTIVE&region=us-east-2"
+            				},
+            				{
+            					"type": "button",
+            					"text": {
+            						"type": "plain_text",
+            						"text": ":aws-prod: ECS Service",
+            						"emoji": true
+            					},
+            					"url": "https://us-east-2.console.aws.amazon.com/ecs/v2/clusters/fbl_cluster-prod/services/api/health?region=us-east-2"
+            				}
+            			]
+            		}
+            	]
+            }
+        env:
+          SLACK_WEBHOOK_URL: ${{vars.SLACK_FEEDBACK_WEBHOOK}}
+          SLACK_WEBHOOK_TYPE: INCOMING_WEBHOOK
+
+      - run: |
+          echo "### :warning: container img uploaded to ECR with v=${{steps.version.outputs.V}}. Please perform manual deployment in ECS." >> $GITHUB_STEP_SUMMARY

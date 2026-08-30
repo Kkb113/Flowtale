@@ -1,0 +1,22 @@
+[
+  {
+    "permission": "read:screen",
+    "desc": "Read screens and screen related assets"
+  },
+  {
+    "permission": "read:tour",
+    "desc": "Read tour and tour related assets"
+  },
+  {
+    "permission": "write:screen",
+    "desc": "Write screens and related assets"
+  },
+  {
+    "permission": "write:tour",
+    "desc": "Write tour and related assets"
+  },
+  {
+    "permission": "view:analytics",
+    "desc": "See any or all analytics"
+  }
+]

@@ -1,0 +1,714 @@
+<html><head><meta http-equiv="Content-Type" content="text/html; charset=utf-8"/><title>Privacy Policy</title>
+<style>
+/* cspell:disable-file */
+/* webkit printing magic: print all background colors */
+html {
+	-webkit-print-color-adjust: exact;
+}
+* {
+	box-sizing: border-box;
+	-webkit-print-color-adjust: exact;
+}
+
+html,
+body {
+	margin: 0;
+	padding: 0;
+}
+@media only screen {
+	body {
+		margin: 2em auto;
+    padding-right: 3rem;
+		max-width: 900px;
+		color: rgb(55, 53, 47);
+	}
+}
+
+body {
+	line-height: 1.5;
+	white-space: pre-wrap;
+}
+
+a,
+a.visited {
+	color: inherit;
+	text-decoration: underline;
+}
+
+.pdf-relative-link-path {
+	font-size: 80%;
+	color: #444;
+}
+
+h1,
+h2,
+h3 {
+	letter-spacing: -0.01em;
+	line-height: 1.2;
+	font-weight: 600;
+	margin-bottom: 0;
+}
+
+.page-title {
+	font-size: 2.5rem;
+	font-weight: 700;
+	margin-top: 0;
+	margin-bottom: 0.75em;
+}
+
+h1 {
+	font-size: 1.875rem;
+	margin-top: 1.875rem;
+}
+
+h2 {
+	font-size: 1.5rem;
+	margin-top: 1.5rem;
+}
+
+h3 {
+	font-size: 1.25rem;
+	margin-top: 1.25rem;
+}
+
+.source {
+	border: 1px solid #ddd;
+	border-radius: 3px;
+	padding: 1.5em;
+	word-break: break-all;
+}
+
+.callout {
+	border-radius: 3px;
+	padding: 1rem;
+}
+
+figure {
+	margin: 1.25em 0;
+	page-break-inside: avoid;
+}
+
+figcaption {
+	opacity: 0.5;
+	font-size: 85%;
+	margin-top: 0.5em;
+}
+
+mark {
+	background-color: transparent;
+}
+
+.indented {
+	padding-left: 1.5em;
+}
+
+hr {
+	background: transparent;
+	display: block;
+	width: 100%;
+	height: 1px;
+	visibility: visible;
+	border: none;
+	border-bottom: 1px solid rgba(55, 53, 47, 0.09);
+}
+
+img {
+	max-width: 100%;
+}
+
+@media only print {
+	img {
+		max-height: 100vh;
+		object-fit: contain;
+	}
+}
+
+@page {
+	margin: 1in;
+}
+
+.collection-content {
+	font-size: 0.875rem;
+}
+
+.column-list {
+	display: flex;
+	justify-content: space-between;
+}
+
+.column {
+	padding: 0 1em;
+}
+
+.column:first-child {
+	padding-left: 0;
+}
+
+.column:last-child {
+	padding-right: 0;
+}
+
+.table_of_contents-item {
+	display: block;
+	font-size: 0.875rem;
+	line-height: 1.3;
+	padding: 0.125rem;
+}
+
+.table_of_contents-indent-1 {
+	margin-left: 1.5rem;
+}
+
+.table_of_contents-indent-2 {
+	margin-left: 3rem;
+}
+
+.table_of_contents-indent-3 {
+	margin-left: 4.5rem;
+}
+
+.table_of_contents-link {
+	text-decoration: none;
+	opacity: 0.7;
+	border-bottom: 1px solid rgba(55, 53, 47, 0.18);
+}
+
+table,
+th,
+td {
+	border: 1px solid rgba(55, 53, 47, 0.09);
+	border-collapse: collapse;
+}
+
+table {
+	border-left: none;
+	border-right: none;
+}
+
+th,
+td {
+	font-weight: normal;
+	padding: 0.25em 0.5em;
+	line-height: 1.5;
+	min-height: 1.5em;
+	text-align: left;
+}
+
+th {
+	color: rgba(55, 53, 47, 0.6);
+}
+
+ol,
+ul {
+	margin: 0;
+	margin-block-start: 0.6em;
+	margin-block-end: 0.6em;
+}
+
+li > ol:first-child,
+li > ul:first-child {
+	margin-block-start: 0.6em;
+}
+
+ul > li {
+	list-style: disc;
+}
+
+ul.to-do-list {
+	padding-inline-start: 0;
+}
+
+ul.to-do-list > li {
+	list-style: none;
+}
+
+.to-do-children-checked {
+	text-decoration: line-through;
+	opacity: 0.375;
+}
+
+ul.toggle > li {
+	list-style: none;
+}
+
+ul {
+	padding-inline-start: 1.7em;
+}
+
+ul > li {
+	padding-left: 0.1em;
+}
+
+ol {
+	padding-inline-start: 1.6em;
+}
+
+ol > li {
+	padding-left: 0.2em;
+}
+
+.mono ol {
+	padding-inline-start: 2em;
+}
+
+.mono ol > li {
+	text-indent: -0.4em;
+}
+
+.toggle {
+	padding-inline-start: 0em;
+	list-style-type: none;
+}
+
+/* Indent toggle children */
+.toggle > li > details {
+	padding-left: 1.7em;
+}
+
+.toggle > li > details > summary {
+	margin-left: -1.1em;
+}
+
+.selected-value {
+	display: inline-block;
+	padding: 0 0.5em;
+	background: rgba(206, 205, 202, 0.5);
+	border-radius: 3px;
+	margin-right: 0.5em;
+	margin-top: 0.3em;
+	margin-bottom: 0.3em;
+	white-space: nowrap;
+}
+
+.collection-title {
+	display: inline-block;
+	margin-right: 1em;
+}
+
+.simple-table {
+	margin-top: 1em;
+	font-size: 0.875rem;
+	empty-cells: show;
+}
+.simple-table td {
+	height: 29px;
+	min-width: 120px;
+}
+
+.simple-table th {
+	height: 29px;
+	min-width: 120px;
+}
+
+.simple-table-header-color {
+	background: rgb(247, 246, 243);
+	color: black;
+}
+.simple-table-header {
+	font-weight: 500;
+}
+
+time {
+	opacity: 0.5;
+}
+
+.icon {
+	display: inline-block;
+	max-width: 1.2em;
+	max-height: 1.2em;
+	text-decoration: none;
+	vertical-align: text-bottom;
+	margin-right: 0.5em;
+}
+
+img.icon {
+	border-radius: 3px;
+}
+
+.user-icon {
+	width: 1.5em;
+	height: 1.5em;
+	border-radius: 100%;
+	margin-right: 0.5rem;
+}
+
+.user-icon-inner {
+	font-size: 0.8em;
+}
+
+.text-icon {
+	border: 1px solid #000;
+	text-align: center;
+}
+
+.page-cover-image {
+	display: block;
+	object-fit: cover;
+	width: 100%;
+	max-height: 30vh;
+}
+
+.page-header-icon {
+	font-size: 3rem;
+	margin-bottom: 1rem;
+}
+
+.page-header-icon-with-cover {
+	margin-top: -0.72em;
+	margin-left: 0.07em;
+}
+
+.page-header-icon img {
+	border-radius: 3px;
+}
+
+.link-to-page {
+	margin: 1em 0;
+	padding: 0;
+	border: none;
+	font-weight: 500;
+}
+
+p > .user {
+	opacity: 0.5;
+}
+
+td > .user,
+td > time {
+	white-space: nowrap;
+}
+
+input[type="checkbox"] {
+	transform: scale(1.5);
+	margin-right: 0.6em;
+	vertical-align: middle;
+}
+
+p {
+	margin-top: 0.5em;
+	margin-bottom: 0.5em;
+}
+
+.image {
+	border: none;
+	margin: 1.5em 0;
+	padding: 0;
+	border-radius: 0;
+	text-align: center;
+}
+
+.code,
+code {
+	background: rgba(135, 131, 120, 0.15);
+	border-radius: 3px;
+	padding: 0.2em 0.4em;
+	border-radius: 3px;
+	font-size: 85%;
+	tab-size: 2;
+}
+
+code {
+	color: #eb5757;
+}
+
+.code {
+	padding: 1.5em 1em;
+}
+
+.code-wrap {
+	white-space: pre-wrap;
+	word-break: break-all;
+}
+
+.code > code {
+	background: none;
+	padding: 0;
+	font-size: 100%;
+	color: inherit;
+}
+
+blockquote {
+	font-size: 1.25em;
+	margin: 1em 0;
+	padding-left: 1em;
+	border-left: 3px solid rgb(55, 53, 47);
+}
+
+.bookmark {
+	text-decoration: none;
+	max-height: 8em;
+	padding: 0;
+	display: flex;
+	width: 100%;
+	align-items: stretch;
+}
+
+.bookmark-title {
+	font-size: 0.85em;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	height: 1.75em;
+	white-space: nowrap;
+}
+
+.bookmark-text {
+	display: flex;
+	flex-direction: column;
+}
+
+.bookmark-info {
+	flex: 4 1 180px;
+	padding: 12px 14px 14px;
+	display: flex;
+	flex-direction: column;
+	justify-content: space-between;
+}
+
+.bookmark-image {
+	width: 33%;
+	flex: 1 1 180px;
+	display: block;
+	position: relative;
+	object-fit: cover;
+	border-radius: 1px;
+}
+
+.bookmark-description {
+	color: rgba(55, 53, 47, 0.6);
+	font-size: 0.75em;
+	overflow: hidden;
+	max-height: 4.5em;
+	word-break: break-word;
+}
+
+.bookmark-href {
+	font-size: 0.75em;
+	margin-top: 0.25em;
+}
+
+.sans { font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, "Apple Color Emoji", Arial, sans-serif, "Segoe UI Emoji", "Segoe UI Symbol"; }
+.code { font-family: "SFMono-Regular", Menlo, Consolas, "PT Mono", "Liberation Mono", Courier, monospace; }
+.serif { font-family: Lyon-Text, Georgia, ui-serif, serif; }
+.mono { font-family: iawriter-mono, Nitti, Menlo, Courier, monospace; }
+.pdf .sans { font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, "Apple Color Emoji", Arial, sans-serif, "Segoe UI Emoji", "Segoe UI Symbol", 'Twemoji', 'Noto Color Emoji', 'Noto Sans CJK JP'; }
+.pdf:lang(zh-CN) .sans { font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, "Apple Color Emoji", Arial, sans-serif, "Segoe UI Emoji", "Segoe UI Symbol", 'Twemoji', 'Noto Color Emoji', 'Noto Sans CJK SC'; }
+.pdf:lang(zh-TW) .sans { font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, "Apple Color Emoji", Arial, sans-serif, "Segoe UI Emoji", "Segoe UI Symbol", 'Twemoji', 'Noto Color Emoji', 'Noto Sans CJK TC'; }
+.pdf:lang(ko-KR) .sans { font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, "Apple Color Emoji", Arial, sans-serif, "Segoe UI Emoji", "Segoe UI Symbol", 'Twemoji', 'Noto Color Emoji', 'Noto Sans CJK KR'; }
+.pdf .code { font-family: Source Code Pro, "SFMono-Regular", Menlo, Consolas, "PT Mono", "Liberation Mono", Courier, monospace, 'Twemoji', 'Noto Color Emoji', 'Noto Sans Mono CJK JP'; }
+.pdf:lang(zh-CN) .code { font-family: Source Code Pro, "SFMono-Regular", Menlo, Consolas, "PT Mono", "Liberation Mono", Courier, monospace, 'Twemoji', 'Noto Color Emoji', 'Noto Sans Mono CJK SC'; }
+.pdf:lang(zh-TW) .code { font-family: Source Code Pro, "SFMono-Regular", Menlo, Consolas, "PT Mono", "Liberation Mono", Courier, monospace, 'Twemoji', 'Noto Color Emoji', 'Noto Sans Mono CJK TC'; }
+.pdf:lang(ko-KR) .code { font-family: Source Code Pro, "SFMono-Regular", Menlo, Consolas, "PT Mono", "Liberation Mono", Courier, monospace, 'Twemoji', 'Noto Color Emoji', 'Noto Sans Mono CJK KR'; }
+.pdf .serif { font-family: PT Serif, Lyon-Text, Georgia, ui-serif, serif, 'Twemoji', 'Noto Color Emoji', 'Noto Serif CJK JP'; }
+.pdf:lang(zh-CN) .serif { font-family: PT Serif, Lyon-Text, Georgia, ui-serif, serif, 'Twemoji', 'Noto Color Emoji', 'Noto Serif CJK SC'; }
+.pdf:lang(zh-TW) .serif { font-family: PT Serif, Lyon-Text, Georgia, ui-serif, serif, 'Twemoji', 'Noto Color Emoji', 'Noto Serif CJK TC'; }
+.pdf:lang(ko-KR) .serif { font-family: PT Serif, Lyon-Text, Georgia, ui-serif, serif, 'Twemoji', 'Noto Color Emoji', 'Noto Serif CJK KR'; }
+.pdf .mono { font-family: PT Mono, iawriter-mono, Nitti, Menlo, Courier, monospace, 'Twemoji', 'Noto Color Emoji', 'Noto Sans Mono CJK JP'; }
+.pdf:lang(zh-CN) .mono { font-family: PT Mono, iawriter-mono, Nitti, Menlo, Courier, monospace, 'Twemoji', 'Noto Color Emoji', 'Noto Sans Mono CJK SC'; }
+.pdf:lang(zh-TW) .mono { font-family: PT Mono, iawriter-mono, Nitti, Menlo, Courier, monospace, 'Twemoji', 'Noto Color Emoji', 'Noto Sans Mono CJK TC'; }
+.pdf:lang(ko-KR) .mono { font-family: PT Mono, iawriter-mono, Nitti, Menlo, Courier, monospace, 'Twemoji', 'Noto Color Emoji', 'Noto Sans Mono CJK KR'; }
+.highlight-default {
+	color: rgba(55, 53, 47, 1);
+}
+.highlight-gray {
+	color: rgba(120, 119, 116, 1);
+	fill: rgba(120, 119, 116, 1);
+}
+.highlight-brown {
+	color: rgba(159, 107, 83, 1);
+	fill: rgba(159, 107, 83, 1);
+}
+.highlight-orange {
+	color: rgba(217, 115, 13, 1);
+	fill: rgba(217, 115, 13, 1);
+}
+.highlight-yellow {
+	color: rgba(203, 145, 47, 1);
+	fill: rgba(203, 145, 47, 1);
+}
+.highlight-teal {
+	color: rgba(68, 131, 97, 1);
+	fill: rgba(68, 131, 97, 1);
+}
+.highlight-blue {
+	color: rgba(51, 126, 169, 1);
+	fill: rgba(51, 126, 169, 1);
+}
+.highlight-purple {
+	color: rgba(144, 101, 176, 1);
+	fill: rgba(144, 101, 176, 1);
+}
+.highlight-pink {
+	color: rgba(193, 76, 138, 1);
+	fill: rgba(193, 76, 138, 1);
+}
+.highlight-red {
+	color: rgba(212, 76, 71, 1);
+	fill: rgba(212, 76, 71, 1);
+}
+.highlight-gray_background {
+	background: rgba(241, 241, 239, 1);
+}
+.highlight-brown_background {
+	background: rgba(244, 238, 238, 1);
+}
+.highlight-orange_background {
+	background: rgba(251, 236, 221, 1);
+}
+.highlight-yellow_background {
+	background: rgba(251, 243, 219, 1);
+}
+.highlight-teal_background {
+	background: rgba(237, 243, 236, 1);
+}
+.highlight-blue_background {
+	background: rgba(231, 243, 248, 1);
+}
+.highlight-purple_background {
+	background: rgba(244, 240, 247, 0.8);
+}
+.highlight-pink_background {
+	background: rgba(249, 238, 243, 0.8);
+}
+.highlight-red_background {
+	background: rgba(253, 235, 236, 1);
+}
+.block-color-default {
+	color: inherit;
+	fill: inherit;
+}
+.block-color-gray {
+	color: rgba(120, 119, 116, 1);
+	fill: rgba(120, 119, 116, 1);
+}
+.block-color-brown {
+	color: rgba(159, 107, 83, 1);
+	fill: rgba(159, 107, 83, 1);
+}
+.block-color-orange {
+	color: rgba(217, 115, 13, 1);
+	fill: rgba(217, 115, 13, 1);
+}
+.block-color-yellow {
+	color: rgba(203, 145, 47, 1);
+	fill: rgba(203, 145, 47, 1);
+}
+.block-color-teal {
+	color: rgba(68, 131, 97, 1);
+	fill: rgba(68, 131, 97, 1);
+}
+.block-color-blue {
+	color: rgba(51, 126, 169, 1);
+	fill: rgba(51, 126, 169, 1);
+}
+.block-color-purple {
+	color: rgba(144, 101, 176, 1);
+	fill: rgba(144, 101, 176, 1);
+}
+.block-color-pink {
+	color: rgba(193, 76, 138, 1);
+	fill: rgba(193, 76, 138, 1);
+}
+.block-color-red {
+	color: rgba(212, 76, 71, 1);
+	fill: rgba(212, 76, 71, 1);
+}
+.block-color-gray_background {
+	background: rgba(241, 241, 239, 1);
+}
+.block-color-brown_background {
+	background: rgba(244, 238, 238, 1);
+}
+.block-color-orange_background {
+	background: rgba(251, 236, 221, 1);
+}
+.block-color-yellow_background {
+	background: rgba(251, 243, 219, 1);
+}
+.block-color-teal_background {
+	background: rgba(237, 243, 236, 1);
+}
+.block-color-blue_background {
+	background: rgba(231, 243, 248, 1);
+}
+.block-color-purple_background {
+	background: rgba(244, 240, 247, 0.8);
+}
+.block-color-pink_background {
+	background: rgba(249, 238, 243, 0.8);
+}
+.block-color-red_background {
+	background: rgba(253, 235, 236, 1);
+}
+.select-value-color-pink { background-color: rgba(245, 224, 233, 1); }
+.select-value-color-purple { background-color: rgba(232, 222, 238, 1); }
+.select-value-color-green { background-color: rgba(219, 237, 219, 1); }
+.select-value-color-gray { background-color: rgba(227, 226, 224, 1); }
+.select-value-color-opaquegray { background-color: rgba(255, 255, 255, 0.0375); }
+.select-value-color-orange { background-color: rgba(250, 222, 201, 1); }
+.select-value-color-brown { background-color: rgba(238, 224, 218, 1); }
+.select-value-color-red { background-color: rgba(255, 226, 221, 1); }
+.select-value-color-yellow { background-color: rgba(253, 236, 200, 1); }
+.select-value-color-blue { background-color: rgba(211, 229, 239, 1); }
+
+.checkbox {
+	display: inline-flex;
+	vertical-align: text-bottom;
+	width: 16;
+	height: 16;
+	background-size: 16px;
+	margin-left: 2px;
+	margin-right: 5px;
+}
+
+.checkbox-on {
+	background-image: url("data:image/svg+xml;charset=UTF-8,%3Csvg%20width%3D%2216%22%20height%3D%2216%22%20viewBox%3D%220%200%2016%2016%22%20fill%3D%22none%22%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%3E%0A%3Crect%20width%3D%2216%22%20height%3D%2216%22%20fill%3D%22%2358A9D7%22%2F%3E%0A%3Cpath%20d%3D%22M6.71429%2012.2852L14%204.9995L12.7143%203.71436L6.71429%209.71378L3.28571%206.2831L2%207.57092L6.71429%2012.2852Z%22%20fill%3D%22white%22%2F%3E%0A%3C%2Fsvg%3E");
+}
+
+.checkbox-off {
+	background-image: url("data:image/svg+xml;charset=UTF-8,%3Csvg%20width%3D%2216%22%20height%3D%2216%22%20viewBox%3D%220%200%2016%2016%22%20fill%3D%22none%22%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%3E%0A%3Crect%20x%3D%220.75%22%20y%3D%220.75%22%20width%3D%2214.5%22%20height%3D%2214.5%22%20fill%3D%22white%22%20stroke%3D%22%2336352F%22%20stroke-width%3D%221.5%22%2F%3E%0A%3C%2Fsvg%3E");
+}
+
+body::-webkit-scrollbar {
+    width: 8px;
+  }
+
+  body::-webkit-scrollbar-thumb {
+    background-color: #F2F2F2;
+    border-radius: 4px;
+  }
+
+  body::-webkit-scrollbar-thumb:hover {
+    background-color: #F1F1F1;
+  }
+
+  body {
+    scrollbar-width: thin;
+	scrollbar-color: rgb(198 201 207) rgb(238 238 238);
+  }
+
+
+	
+</style></head><body><article id="0b34cca7-9068-4e0c-9700-33f0f966581a" class="page sans"><header><h1 class="page-title">Privacy Policy</h1></header><div class="page-body"><p id="df05beb5-3bdd-48c2-a5a8-153199916a76" class="">Pyxis Voyager, Inc. (“Fable,” “Altairvis Technology Solutions Private Limited”, “we,” “us,” “our”) care about how your personal information is used and shared, and we take your privacy seriously. Please read the following to learn more about our Privacy Policy. By visiting or using the various websites owned and operated by Fable under the <a href="http://sharefable.com/">sharefable.com</a> domain or subdomain, including, without limitation, the <a href="https://sharefable.com/">https://sharefable.com/</a> website (each, a “Website, and collectively, the “Websites”), accessing, or viewing demos hosted by Fable and/or accessing or using any other functionalities, features, applications or services offered from time to time by Fable in connection with the Websites (collectively, the “Services”) in any manner, you acknowledge that you accept the practices and policies outlined in this Privacy Policy, and you hereby consent to our collection, use, and sharing of your information in the following ways.</p><h1 id="13cd6c4b-21ae-4d91-894a-c8e9d46dab83" class="">1. What Does This Privacy Policy Cover?</h1><p id="036d662a-54a5-40a7-84f8-9d6fdb5247df" class="">This Privacy Policy covers our treatment of</p><ol type="1" id="5bead4bc-c8a1-46ab-9146-23b2c1974eb9" class="numbered-list" start="1"><li>Personally identifiable information, as defined by numerous statutes in the United States (such statutes, the “PII Laws”);</li></ol><ol type="1" id="22a9cd32-19f6-4967-8d86-87e0fd4e066e" class="numbered-list" start="2"><li>Information protected by the California Consumer Privacy Act (the “CCPA”);</li></ol><ol type="1" id="0e9d104e-cab7-452e-9592-035530dc0276" class="numbered-list" start="3"><li>Information protected by California Online Privacy Protection Act (“CalOPPA”);</li></ol><ol type="1" id="19c33dac-5413-4094-89e3-e5ab98576998" class="numbered-list" start="4"><li>Personal information and private information, as defined by the New York Stop Hacks and Improve Electronic Data Security Act (the “SHIELD Act”);</li></ol><ol type="1" id="c94e871d-5c71-40ce-bbd6-8af9ced153b0" class="numbered-list" start="5"><li>Personal data, as defined by the European Union General Data Protection Regulation (the “GDPR”);
+(and collectively with the PII Laws, CCPA, CalOPPA, the SHIELD Act, and GDPR, the “Privacy Laws”) (collectively, “Personal Information”), which we gather when you are accessing, viewing or using any of our Websites, Media and/or Services. This policy does not apply to the practices of companies that we do not own or control, or to individuals that we do not employ or manage.</li></ol><h1 id="6c2c21e7-9bf7-46fa-9aef-d04ef431ec10" class="">2. What Information Does Fable Collect?</h1><p id="9f58eb78-a4fe-4096-82a5-2567f40bce28" class="">Fable does not collect Personal Information indiscriminately. We limit the type of Personal Information and the amount of Personal Information to what is necessary to fulfill the purposes identified in this Privacy Policy. With that in mind, we collect the following types of information:</p><h2 id="1ca538fe-d3f8-4ba8-8c94-3d472742aa3a" class="">Information You Provide to Us:</h2><p id="1e6dbff0-a033-41dc-9f1d-0497b1f8d387" class="">We may collect Personal Information from you when you visit any of our Websites, register for or subscribe to our Services, contact us with questions or concerns, and/or otherwise interact with our Websites or Services.</p><p id="74f1c758-6131-4141-85de-c8087878be32" class="">For example, when you register for our Services, we may collect your name, display picture, and e-mail address so you can access the Services. The detailed scope of the access is shown to the user beforehand by an OAuth2 consent screen.</p><h2 id="a8b6ba66-10e4-4d52-a2ac-5cd3630023d4" class="">Information Collected Automatically:</h2><p id="2cebc427-fd55-4f31-9709-7336b6d14a72" class="">Whenever you interact with any of our Websites, we automatically receive and record information on our server logs from your browser including data related to demo usage and “cookie” information. “Cookies” are identifiers we transfer to your computer or mobile device that allow us to recognize your browser or mobile device and tell us how and when pages in our Website are visited and used and by how many people. You may be able to change the preferences on your browser or mobile device to send “do not track” signals or to prevent or limit your computer or device’s acceptance of cookies, but this may prevent you from taking advantage of some of our Website’s features. If you click on a link to a third party website, such third party may also transmit cookies to you. This Privacy Policy does not cover the use of cookies by any third parties.</p><h2 id="0e665dc8-18ac-43a1-88ad-84bd6f6fafe0" class="">E-mail and Other Communications:</h2><p id="91ed33b2-1881-4f63-a007-f67f70bb3f7c" class="">We may contact you, by email or other means; for example, we may send you promotional offers on behalf of other businesses, or communicate with you about your use of any of the Websites. When we do this, we may receive a confirmation when you open an email from us. This confirmation helps us make emails more interesting and improve our service.</p><h2 id="17042b0c-98f9-4495-a65b-bab2fbe9105c" class="">Personal Information Fable Has Collected in the Last  6 Months</h2><p id="c823cb05-9231-45c9-b06d-bfc888dccffb" class="">Fable has collected the following categories of Personal Information in the 6 months immediately preceding the Effective Date of this Privacy Policy, listed at the bottom of this document:</p><ul id="3f9b1d87-d105-4c7e-be20-10941e149f09" class="bulleted-list"><li style="list-style-type:disc">names</li></ul><ul id="bf52b92f-07ac-4c4c-9a44-e8626ef1bee0" class="bulleted-list"><li style="list-style-type:disc">contact information</li></ul><ul id="9188f101-c568-41c8-a3a1-1c3d3850b15c" class="bulleted-list"><li style="list-style-type:disc">payment card information</li></ul><ul id="37f8f4cb-131f-47cb-bb88-0f01a43d5e3c" class="bulleted-list"><li style="list-style-type:disc">browser information</li></ul><ul id="46c7a2cc-dd65-4761-9862-2307a88c2372" class="bulleted-list"><li style="list-style-type:disc">device information</li></ul><ul id="e1b10b9e-8504-47a8-856d-725d7b3c909d" class="bulleted-list"><li style="list-style-type:disc">information related to the use of the Websites and Services</li></ul><ul id="9c3bf864-2e12-4723-a1cb-44646b9a01a7" class="bulleted-list"><li style="list-style-type:disc">email confirmations</li></ul><ul id="8c14bcfe-a245-44aa-a554-026e64303c74" class="bulleted-list"><li style="list-style-type:disc">e-mail addresses to permit access to the Services</li></ul><ul id="dc6f7964-31fc-4c3c-8eec-6daf416423ac" class="bulleted-list"><li style="list-style-type:disc">the content of communications and user profile information and submissions.</li></ul><p id="15698376-8ebc-4214-a802-dcf4df361da8" class="">Please see the other portions of Section 2 above for an explanation of the categories of sources from which we collect the information described in the previous sentence.</p><p id="83227f7e-c97c-4d87-80ca-f969621af580" class="">The business purposes of this information are described in Section 3 below.
+The categories of third parties we share this information with are described in Section 4.</p><h1 id="c69d6f3c-06f5-4860-a26a-86b4320d5a66" class="">3. What Does Fable Do With Personal Information?</h1><p id="04e8c5c8-b64f-4bd1-9ce2-d51c7b798c55" class="">We may use Personal Information (described in Section 2) to personalize and improve our Services, to administer and improve our Websites, to allow our users to set up a user account and profile, to contact users, to fulfill your requests for certain products and services, to analyze how users utilize the Websites, and as otherwise set forth in this Privacy Policy.</p><p id="205e5984-ef6f-4f62-8fcf-98d15ceef2b7" class="">We may use payment card information to process payments to Fable. In addition, we may also provide Customers with the information listed above so that they may(i) assess, improve, and develop interactive demos built on Fable (ii) use this information to maintain and grow their organizations.</p><h1 id="d20cfb4e-5220-47db-8253-41dab1f778f5" class="">4. Will Fable Share Any of the Personal Information it Collects?</h1><p id="da1c5a12-129b-47f0-b793-d9eea3253250" class="">We share your Personal Information with third parties as described below.</p><h3 id="3e98cdfd-6bf3-4537-8907-4ca07d798fd8" class="">Customers</h3><p id="cb0a41ff-9210-483f-94bf-59fa9a2213be" class="">As mentioned above, we may provide Customers with certain identifiable usage information directly related to demos built on Fable. Such information may include information collected via Fable forms, browser information, device information, and information related to the use of the Websites and Services.</p><h3 id="3ba8fafe-84e0-4fce-9233-fec26b9b83b9" class="">Transfers of Personal Information Subject to the EU-US and Swiss-US Privacy Shield</h3><p id="0ad8b120-73d0-4556-9e92-0406e760b289" class="">We provide EU or Swiss individuals with opt-out or opt-in choice before we share their data with third parties other than our agents, or before we use it for a purpose other than which it was originally collected or subsequently authorized. To limit the use and disclosure of your personal information, please submit a written request to <a href="mailto:privacy@sharefable.com">privacy@sharefable.com</a>. Further details regarding the EU-US and Swiss-US Privacy Shield are provided below.</p><h3 id="71c8613f-0eaa-4ee0-8df6-d67c2e01b97a" class="">Business Transfer</h3><p id="816fd635-c2e4-4a1a-b176-b6f3b5ba0ca4" class="">We may choose to buy or sell assets. In these types of transactions, customer information is typically one of the business assets that is transferred. Also, if we (or substantially all of our assets) are acquired, or if we go out of business, enter bankruptcy, or go through some other change of control, Personal Information would be one of the assets transferred to or acquired by a third party.</p><h3 id="f1be74ff-86bc-46a3-a389-2fde8a1e8913" class="">Protection of Fable and Others</h3><p id="c71e05dc-81bf-4951-a892-a19e1555c1d5" class="">We reserve the right to access, read, preserve, and disclose any information that we reasonably believe is necessary to comply with law or court order; enforce or apply our conditions of use and other agreements; or protect the rights, property, or safety of Fable, our employees, our users, or others. This includes exchanging information with other companies and organizations for fraud protection and credit risk reduction.</p><h3 id="ccfc0b14-3204-4a6e-bce2-1c0f8fe8af3b" class="">With Your Consent:</h3><p id="138eb2d5-3bc9-491b-b5de-79268e5771e0" class="">Except as set forth above, you will be notified when your Personal Information may be shared with third parties and will be able to prevent the sharing of this information.</p><h3 id="77bb7098-7c84-49d7-9d8e-329178df21e3" class="">What Is Fable’s Legal Basis for Collecting and Using Your Personal Information?</h3><p id="e6814812-7d5a-4077-bfdc-1d5317e68f18" class="">As relevant, Fable collects and uses your Personal Information (1) pursuant to your informed consent, which you have granted by confirming the prompts produced by the Websites and by continuing to use the Websites and Services, consistent with the Privacy Policy and Fable’s terms of service, (2) in order to pursue Fable’s legitimate business interests providing the Services, and maintaining the Websites, and/or (3) in order to perform a contract to which you are a party. Any one or more of the bases in the previous sentence are the legal basis for Fable’s collection and use of your Personal Information, depending on how your use of the Websites and Services, and your relationship with Fable. For further information about the specific legal basis or bases permitting Fable to collect and use your Personal Information, please contact Fable at <a href="mailto:privacy@sharefable.com">privacy@sharefable.com</a>.</p><h1 id="573f0fa7-ce8b-4995-8ac0-8760b98259ab" class="">5. How Long Does Fable Retain Your Personal Information?</h1><p id="21e3a6fa-779a-4ae5-a126-df76e82de005" class="">Except upon the request of an individual, as explained in Section 7 below, and except as the law permits and requires, Fable maintains Personal Information as follows: a. Logs of known users of the Websites are retained while Fable has reason to believe that particular user may return to use the Websites. b. Emails submitted and used for marketing are retained while Fable pursues relevant marketing efforts. Other than as listed above, we will determine the retention period for Personal Information based on the following criteria:</p><ul id="ed090d1c-5aa2-4ae3-9945-e53a83c3ccbd" class="bulleted-list"><li style="list-style-type:disc">The nature of our relationship with the relevant Customer;</li></ul><ul id="5a814450-6fb0-4211-8745-f1d978971c50" class="bulleted-list"><li style="list-style-type:disc">The existence of other ongoing or expected projects with the relevant Customer;</li></ul><ul id="58216980-8555-484f-9fa6-eda62681db0b" class="bulleted-list"><li style="list-style-type:disc">The nature of the Personal Information in question; and</li></ul><ul id="ea505ab5-c84b-4122-b7d3-ba00ad666212" class="bulleted-list"><li style="list-style-type:disc">Our business needs.</li></ul><h1 id="c8690987-4bb0-4058-bde6-5b55acc8b981" class="">6. What Are Users’ Rights to Control Their Personal Information?</h1><p id="b8bfcc04-838b-40ae-9000-9bd4c0d8b284" class="">Except where permitted or required by law (including, but not limited to, compliance with a legal obligation, to further a public interest, and establishing and/or exercising a legal claim or defense), you have the following rights regarding Fable’s collection and use of your Personal Information.</p><h2 id="8c2ff827-3f11-4a70-b0fa-5824f4716c61" class="">Requests to Fable</h2><p id="6ea724aa-23ce-4e99-9f3f-56c22a46d544" class="">You may request</p><ul id="a0d2b991-4655-4204-b529-78d5f34da024" class="bulleted-list"><li style="list-style-type:disc">the correction, updating, deletion, or restriction of collection and use of your Personal Information</li></ul><ul id="f693b9b5-94bd-4c69-a752-0907cf5d4532" class="bulleted-list"><li style="list-style-type:disc">the categories of Personal Information Fable has collected</li></ul><ul id="2ed3acc9-ac65-44ca-8f86-18eef5ff5a93" class="bulleted-list"><li style="list-style-type:disc">the categories of sources from which Fable has collected your Personal Information</li></ul><ul id="5994a6e4-b2d3-4b04-aa55-90169dd64458" class="bulleted-list"><li style="list-style-type:disc">the business purpose(s) for collecting and disclosing your Personal Information</li></ul><ul id="eb455e76-3948-4134-8b7a-aa49ae78d874" class="bulleted-list"><li style="list-style-type:disc">an aggregated account of how Fable has used or is using your Personal Information</li></ul><ul id="38f7c336-1fb1-4685-9469-b0a8d28e5f4e" class="bulleted-list"><li style="list-style-type:disc">a copy of your Personal Information retained by Fable, to be delivered in a structured, commonly used and machine readable format to review or to transfer or transmit to another entity without hindrance, to the extent that that is technically feasible</li></ul><ul id="d2c34525-e071-4cfd-bbe1-9c02a484f9f4" class="bulleted-list"><li style="list-style-type:disc">the categories of third parties with whom Fable shares your Personal Information</li></ul><ul id="ffe93d06-c088-4a29-8d9b-3a96b5eab222" class="bulleted-list"><li style="list-style-type:disc">the categories of Personal Information which we share with third parties, and the contact information for such affiliates and/or third parties</li></ul><ul id="fd9aa10d-7899-4b12-8e71-fd361409ec4e" class="bulleted-list"><li style="list-style-type:disc">a list of all third parties that have received your Personal Information from Fable, and</li></ul><ul id="1e452f71-02d0-49c7-a7ec-fb1cb614d18e" class="bulleted-list"><li style="list-style-type:disc">the specific pieces of Personal Information Fable has collected about you.</li></ul><p id="0bf2f734-dc9d-42d3-b76b-16861deaf3f3" class="">We will respond to all such requests within 60 days, subject to lawful extension of that period, and there may be a delay in processing a request while we verify that the request is valid and originates from you as opposed to an unauthorized third party.</p><p id="43f43fa2-1190-46bf-af78-69f44079bc67" class="">Our verification process varies based on the source and nature of the request, but may include: comparing data in the request against Personal Information we retain; contacting you using other contact information; and requesting further information, although we will avoid doing so to the extent possible.</p><p id="1b3a5910-ed35-4ada-bf29-b55ae59abade" class="">To the extent permitted by the Privacy Laws, Fable retains the right to deny any request if we cannot verify that it originated from you.</p><p id="e3b15fde-86fd-4f8b-8c40-c7e8f41f1cb8" class="">If you request that your Personal Information be deleted or that we restrict our disclosure of your Personal Information such that we cannot provide that information to third parties we rely on to provide Websites and Services, we reserve the right to terminate and/or limit your access to the Websites and Services. If we do not have your Personal Information, have not collected your Personal Information, or have not disclosed or transferred your Personal Information to another party, we will inform you in response to a request regarding your Personal Information.</p><p id="336c3301-287a-447b-8866-adf7f4a8be52" class="">In order to make any of the requests above, please follow the following directions:</p><p id="bfb442de-4ce4-4a6d-95b5-dd073e4ea855" class="">Requests for</p><ul id="74550d8e-6389-4301-8cd3-77e8c9205361" class="bulleted-list"><li style="list-style-type:disc">the categories of Personal Information Fable has collected</li></ul><ul id="4cf92a05-ff60-4e2f-bdd5-339ddf0d4ce5" class="bulleted-list"><li style="list-style-type:disc">the categories of sources from which Fable has collected your Personal Information</li></ul><ul id="0b717608-289b-4044-b967-f20e81ce1c9e" class="bulleted-list"><li style="list-style-type:disc">the business purpose(s) for collecting and disclosing your Personal Information</li></ul><ul id="8487f37a-5a71-4303-9447-fbb0577b9fc0" class="bulleted-list"><li style="list-style-type:disc">the categories of third parties with whom Fable shares your Personal Information</li></ul><ul id="0b44e712-ba48-4d2a-bdb4-3dc0ae92d406" class="bulleted-list"><li style="list-style-type:disc">the categories of Personal Information which we share with third parties, and the contact information for such affiliates and/or third parties</li></ul><ul id="b3962767-88b8-406c-ba61-fbfc108f95a6" class="bulleted-list"><li style="list-style-type:disc">the specific pieces of Personal Information Fable has collected about you, and</li></ul><ul id="4b8233f4-5d61-4ee3-80d3-229b4bd21d8e" class="bulleted-list"><li style="list-style-type:disc">a copy of your Personal Information retained by Fable</li></ul><p id="a4571c98-04e3-46f1-ba75-fdc567ed804c" class="">to be delivered in a structured, commonly used and machine readable format to review or to transfer or transmit to another entity without hindrance, to the extent that that is technically feasible, may be sent to us at <a href="mailto:privacy@sharefable.com">privacy@sharefable.com</a>.</p><p id="4887de23-2c16-4731-879a-8d4b1652cecc" class="">When you update information, we may maintain a copy of the unrevised information in our records. Please note that some information may remain in our private records after your deletion of such information from your account. We may use any aggregated data derived from or incorporating your Personal Information after you update or delete it, but not in a manner that would identify you personally.</p><h2 id="f4f30ad0-eff0-47de-98bc-162bc3321ccc" class="">Withdrawal of Consent:</h2><p id="4c7953be-7a73-4950-b3f6-bb80c5157abb" class="">You may withdraw your consent at any time by contacting us at <a href="mailto:privacy@sharefable.com">privacy@sharefable.com</a>.</p><h2 id="a8a2352a-24e2-4ebc-a084-5557a960af08" class="">Object or Challenge:</h2><p id="f0ad080e-34c6-410f-81cb-87c7e6ec08d5" class="">You may object, on grounds relating to your particular situation, at any time to the collection and use of your Personal Information based on Fable’s legitimate interests or based on public interests, or otherwise challenge our compliance with the Privacy Laws, by contacting us at <a href="mailto:privacy@sharefable.com">privacy@sharefable.com</a>.</p><p id="e2fef36d-0a8b-4af4-a255-3552d832d004" class="">Fable shall respond within at least 30 days, subject to lawful extension of that period. Where such objection is received from an individual whose Personal Information Fable collects and uses as the processor for a controller (as those terms are defined in the GDPR), Fable shall inform the controller of the objection within at least 30 days, subject to lawful extension of that period.</p><h2 id="b80c026c-25c8-49c8-980c-007424d73c0e" class="">Prohibit Automated Processing:</h2><p id="c4009fc7-c4d1-4524-ac37-43599688c98a" class="">At your request, Fable will terminate any automated decision making that is the sole source of decisions that produce a legal effect concerning you or similarly significantly affect you. Please note that consistent with Section 7, Fable does not employ any such decision making at this time.</p><h2 id="be34aaf7-d106-4f8e-a8b2-0b78c1d32144" class="">Accessibility for Users with Disabilities:</h2><p id="48b48f77-7ca0-45ef-9c64-f496738ef2c2" class="">If you are unable to review this Privacy Policy or any portion of this Policy, please contact us at <a href="mailto:privacy@sharefable.com">privacy@sharefable.com</a> to receive the information in an alternative format.</p><h2 id="753b47b8-7e7f-4987-a8a9-d1ef62f7809f" class="">Non-Discrimination:</h2><p id="46eba342-3666-47cf-8ec5-d335cc6881af" class="">Fable will not discriminate against you because you have exercised any of the rights above or any other rights you retain pursuant to Privacy Laws, including, but not limited to by: denying goods or services to you or providing a different level or quality of goods or services to you.</p><h1 id="7259c78d-7ba9-4248-be8e-d3e1827d821c" class="">7. Automated Decision Making</h1><p id="c45738d8-67c1-4cf9-903c-1d94fbf278cb" class="">Fable does not rely on automated decision making, including profiling, and will not subject you to decisions based solely on automated processing which will produce legal effects concerning you or similarly significantly affecting you.</p><h1 id="f8245954-92b6-4546-942a-f64defbd5cbb" class="">8. Is Personal Information About Me Secure?</h1><p id="a47fbe62-7c5e-49be-90a8-df6b30237da5" class="">We employ appropriate administrative, organizational, technical, and physical measures to protect your Personal Information, which we regularly review and update as necessary.</p><p id="7f3f12bb-2ea7-47bc-86ed-f3a083cf2d01" class="">Fable practices encryption of data in rest (AES-256) and transit (HTTPS/TLS) for it&#x27;s resources. Moreover, Personal data is accessible only by the security team.</p><p id="e45f29be-1e2d-4083-9433-12300d47d64a" class="">Fable supports logging in to the system via social login provider (Google / Microsoft), in that case, your Fable account protection is an extension of Google / Microsoft&#x27;s email account protection. Fable also allows users to log in with an email id and password, in that case, your account will be protected by email verification for your privacy and security.</p><p id="c0e3a8be-e8d4-4efa-b72f-b94f0067c0f9" class="">You must prevent unauthorized access to your account and Personal Information by limiting access to your computer or device and browser by signing off after you have finished accessing your account.</p><p id="8eb9cd69-71a1-4052-b22f-6fb6c507a6a4" class="">We endeavor to protect the privacy of your account and other Personal Information we hold in our records, but we cannot guarantee complete security. Unauthorized entry or use, hardware or software failure, and other factors may compromise the security of user information at any time. The Websites may contain links to other sites. We are not responsible for the privacy policies and/or practices on other sites. When following a link to another site you should read that site’s privacy policy.</p><h1 id="12eb6424-f366-45b4-b211-2dfec1ee4260" class="">9. Children’s Privacy</h1><p id="2ac74f8f-64a6-4c2c-80ff-2b33c0f49587" class="">Our Services do not address anyone under the age of 13. We do not knowingly collect personal identifiable information from children under 13. In the case we discover that a child under 13 has provided us with personal information, we immediately delete this from our servers. If you are a parent or guardian and you are aware that your child has provided us with personal information, please contact us at <a href="mailto:privacy@sharefable.com">privacy@sharefable.com</a> so that we can take appropriate action.</p><h1 id="27584e9e-0e21-4962-a016-a863c0bf5b8e" class="">10. Contractual or Statutory Requirement</h1><p id="5dcb1c2d-210b-4bf6-ad56-b4a8d19cf5cb" class="">Except as noted in this Privacy Policy or in contractual documents, Fable’s collection and use of Personal Information is not a contractual or statutory requirement or a requirement necessary to enter into a contract.</p><h1 id="fecd59e7-1e02-4369-997a-e440dccc8813" class="">11. Failure to Provide Personal Information</h1><p id="12017fb6-fbe0-4a1c-81ba-06ae9291a293" class="">You can always opt not to disclose information to us, but keep in mind some information may be needed to register with us or to take advantage of some of our special features.</p><h1 id="1e2d7c4a-838e-40ef-9cd2-1551b77f42a9" class="">12. Compliance</h1><table id="6cde658a-61f7-460a-8a0b-14c022cd62fe" class="simple-table"><thead class="simple-table-header"><tr id="cccd3f77-7ea2-45a0-9924-5861f6c60c9f"><th id="=\jU" class="simple-table-header-color simple-table-header" style="width:407px">Terms</th><th id="]V;m" class="simple-table-header-color simple-table-header">Governed By</th><th id="xBgQ" class="simple-table-header-color simple-table-header" style="width:502.25px">Fable’s Compliance</th></tr></thead><tbody><tr id="15020675-1372-4a68-8c4d-291cf8790fec"><th id="=\jU" class="simple-table-header-color simple-table-header" style="width:407px"><strong>Lawful basis for processing</strong></th><td id="]V;m" class="">GDPR</td><td id="xBgQ" class="" style="width:502.25px">Compliant
+<em>Details of compliance is present in this Privacy Policy document Section 2 &amp; 3</em></td></tr><tr id="17571cad-2b83-43e8-b45e-caa68045e419"><th id="=\jU" class="simple-table-header-color simple-table-header" style="width:407px"><strong>Individual rights</strong></th><td id="]V;m" class="">GDPR</td><td id="xBgQ" class="" style="width:502.25px">Compliant
+<em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em>Details of compliance is present in this Privacy Policy document Section 6</em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></td></tr><tr id="7867c10a-426c-4ee1-b5be-763ac0d0bce7"><th id="=\jU" class="simple-table-header-color simple-table-header" style="width:407px"><strong>Data protection by design and by default</strong></th><td id="]V;m" class="">GDPR</td><td id="xBgQ" class="" style="width:502.25px">Compliant
+<em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em>Details of compliance is present in this Privacy Policy document Section 8</em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></td></tr><tr id="163f1e80-361f-49a1-9cf7-d1bcb05b7ed5"><th id="=\jU" class="simple-table-header-color simple-table-header" style="width:407px"><strong>Data protection impact assessments (DPIAs)</strong></th><td id="]V;m" class="">GDPR</td><td id="xBgQ" class="" style="width:502.25px">In Progress
+<em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em>This document will be updated once this is done</em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></td></tr><tr id="1e183786-30d1-45eb-be9b-6cfe9dd1925d"><th id="=\jU" class="simple-table-header-color simple-table-header" style="width:407px"><strong>Data breach notification</strong></th><td id="]V;m" class="">GDPR</td><td id="xBgQ" class="" style="width:502.25px">Compliant
+<em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em>All the observability systems are in place. Once a compromise is detected &amp; triaged, a mail will be sent to all user with the details of the event</em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></td></tr><tr id="cf29ca08-865b-4a59-9e6c-41af3690e6fa"><th id="=\jU" class="simple-table-header-color simple-table-header" style="width:407px"><strong>Data protection officer (DPO)</strong></th><td id="]V;m" class="">GDPR</td><td id="xBgQ" class="" style="width:502.25px">Compliant
+<em><em><em><em><em><em><em><em><em><em>A team consisting akash@sharefable.com</em></em></em></em></em></em></em></em></em></em></td></tr><tr id="d7e9bea0-ebd0-41e7-909c-896e36feec39"><th id="=\jU" class="simple-table-header-color simple-table-header" style="width:407px"><strong>International data transfers</strong></th><td id="]V;m" class="">GDPR</td><td id="xBgQ" class="" style="width:502.25px">Complaint
+<em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em>Details of compliance is present in this Privacy Policy document Section 4</em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></td></tr><tr id="9258f5a4-033f-4ec5-965c-d9e884506b80"><th id="=\jU" class="simple-table-header-color simple-table-header" style="width:407px"><strong>Accountability</strong></th><td id="]V;m" class="">GDPR</td><td id="xBgQ" class="" style="width:502.25px">Compliant
+<em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em>The document outlines the measures we have taken, the process we follow to secure user data</em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></td></tr><tr id="5dab5399-1fe4-4117-89f7-43a86fcf7582"><th id="=\jU" class="simple-table-header-color simple-table-header" style="width:407px"><strong>Notice of collection</strong></th><td id="]V;m" class="">CCPA</td><td id="xBgQ" class="" style="width:502.25px">Compliant
+<em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em>Details of compliance is present in this Privacy Policy document Section 6</em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></td></tr><tr id="33554ecf-4209-4c89-a63c-1e1fcb293a2f"><th id="=\jU" class="simple-table-header-color simple-table-header" style="width:407px"><strong>Right to deletion</strong></th><td id="]V;m" class="">CCPA</td><td id="xBgQ" class="" style="width:502.25px">Compliant
+<em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em>Details of compliance is present in this Privacy Policy document Section 6</em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></td></tr><tr id="9c015f3f-27de-4c92-b1b4-48308bf63f7b"><th id="=\jU" class="simple-table-header-color simple-table-header" style="width:407px"><strong>Right to know</strong></th><td id="]V;m" class="">CCPA</td><td id="xBgQ" class="" style="width:502.25px">Compliant
+<em>Details of compliance is present in this Privacy Policy document Section 2,   3 &amp; 4</em></td></tr><tr id="b2386ebf-58a3-40aa-b761-05bacf9d37bc"><th id="=\jU" class="simple-table-header-color simple-table-header" style="width:407px"><strong>Right to opt-out</strong></th><td id="]V;m" class="">CCPA</td><td id="xBgQ" class="" style="width:502.25px">Compliant
+<em>Details of compliance is present in this Privacy Policy document Section 6</em></td></tr><tr id="283b96e0-6fcb-4771-9662-95b9adbc0f52"><th id="=\jU" class="simple-table-header-color simple-table-header" style="width:407px"><strong>Non-discrimination</strong></th><td id="]V;m" class="">CCPA</td><td id="xBgQ" class="" style="width:502.25px">Compliant
+<em>Details of compliance is present in this Privacy Policy document Section 6</em></td></tr><tr id="1c44316f-5601-4d78-a446-00490a748094"><th id="=\jU" class="simple-table-header-color simple-table-header" style="width:407px"><strong>Verification of consumer requests</strong></th><td id="]V;m" class="">CCPA</td><td id="xBgQ" class="" style="width:502.25px">Partially Compliant &amp; In Progress</td></tr><tr id="99dfc7d7-a6bd-4143-9d22-00131217992f"><th id="=\jU" class="simple-table-header-color simple-table-header" style="width:407px">Employee training</th><td id="]V;m" class="">CCPA</td><td id="xBgQ" class="" style="width:502.25px">Compliant</td></tr><tr id="89080786-89e6-4043-ba70-6b6771053c01"><th id="=\jU" class="simple-table-header-color simple-table-header" style="width:407px">Record-keeping</th><td id="]V;m" class="">CCPA</td><td id="xBgQ" class="" style="width:502.25px">Compliant</td></tr><tr id="60b4e3c4-8d7f-40f7-ab78-ac59ee01b316"><th id="=\jU" class="simple-table-header-color simple-table-header" style="width:407px"><strong>Disclosure of information collection</strong></th><td id="]V;m" class="">CalOPPA</td><td id="xBgQ" class="" style="width:502.25px">Compliant
+<em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em>Details of compliance is present in this Privacy Policy document Section 6</em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></td></tr><tr id="a9337570-9b3f-46da-b4cd-22bb12a75836"><th id="=\jU" class="simple-table-header-color simple-table-header" style="width:407px"><strong>Disclosure of third-party sharing</strong></th><td id="]V;m" class="">CalOPPA</td><td id="xBgQ" class="" style="width:502.25px">Compliant
+<em>Details of compliance is present in this Privacy Policy document Section 6</em></td></tr><tr id="87984383-3fda-43da-adf8-c20576b24f84"><th id="=\jU" class="simple-table-header-color simple-table-header" style="width:407px"><strong>Disclosure of the use of &quot;Do Not Track&quot; signals</strong></th><td id="]V;m" class="">CalOPPA</td><td id="xBgQ" class="" style="width:502.25px">Compliant
+<em>Details of compliance is present in this Privacy Policy document Section 6</em></td></tr><tr id="42fa0b7c-a044-43d5-86dc-4eac85fe6386"><th id="=\jU" class="simple-table-header-color simple-table-header" style="width:407px"><strong>How operators notify changes</strong></th><td id="]V;m" class="">CalOPPA</td><td id="xBgQ" class="" style="width:502.25px">Compliant
+<em>Details are shared via email and website homepage update</em></td></tr><tr id="f9fbaf2b-37bb-44a7-89d5-37a46312a250"><th id="=\jU" class="simple-table-header-color simple-table-header" style="width:407px"><strong>Conspicuous placement</strong></th><td id="]V;m" class="">CalOPPA</td><td id="xBgQ" class="" style="width:502.25px">Compliant</td></tr><tr id="8beb602d-7c10-4a7e-a82f-a939c5689a81"><th id="=\jU" class="simple-table-header-color simple-table-header" style="width:407px"><strong>Reasonable security practices</strong></th><td id="]V;m" class="">CalOPPA</td><td id="xBgQ" class="" style="width:502.25px">Compliant</td></tr><tr id="d8277ef5-dd4f-4978-b9d5-45cd3bdff0ba"><th id="=\jU" class="simple-table-header-color simple-table-header" style="width:407px"><strong>Reasonable data security requirements</strong></th><td id="]V;m" class="">SHIELD Act</td><td id="xBgQ" class="" style="width:502.25px">Compliant
+<em>Details of compliance is present in this Privacy Policy document Section 8</em></td></tr><tr id="cae5b7ae-4957-4f51-a2c0-fa7a9cbc7d83"><th id="=\jU" class="simple-table-header-color simple-table-header" style="width:407px"><strong>Data breach notification</strong></th><td id="]V;m" class="">SHIELD Act</td><td id="xBgQ" class="" style="width:502.25px">Compliant
+<em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em>All the observability systems are in place. Once a compromise is detected &amp; triaged, a mail will be sent to all user with the details of the event</em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></td></tr><tr id="4116c737-6b04-4d39-a44e-bfb3d3e683e5"><th id="=\jU" class="simple-table-header-color simple-table-header" style="width:407px"><strong>Reasonable data retention policies</strong></th><td id="]V;m" class="">SHIELD Act</td><td id="xBgQ" class="" style="width:502.25px">Compliant
+<em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em><em>Details of compliance is present in this Privacy Policy document Section 6</em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></em></td></tr><tr id="e85ae194-14ed-4d0c-a32d-acced480e62b"><th id="=\jU" class="simple-table-header-color simple-table-header" style="width:407px"><strong>Third-party service provider security</strong></th><td id="]V;m" class="">SHIELD Act</td><td id="xBgQ" class="" style="width:502.25px">Compliant
+<em>Details of compliance is present in this Privacy Policy document Section 6</em></td></tr></tbody></table><h1 id="7ecbde87-f306-487f-87ba-2e6ed21917d3" class="">13. Changes to this Privacy Policy</h1><p id="79d81877-032a-4ff2-8ac2-cb9ef1f86f5d" class="">We may amend this Privacy Policy from time to time. Use of information we collect now is subject to the Privacy Policy in effect at the time such information is used. If we make changes in the way we use Personal Information, we will update the privacy policy found on the Websites. You are bound by any changes to the Privacy Policy when you use the Website after such changes have been first posted.</p><h1 id="71973c72-afc6-4d5d-afaa-9ba9a96dddc9" class="">14. Questions or Concerns; Contact Information</h1><p id="4ffac6fc-8b1c-4717-b0c1-bf73cd435d11" class="">If you have any questions or concerns regarding our privacy policies, please contact our privacy team at <a href="mailto:privacy@fable.com">privacy@sharefable.com</a></p></div></article></body></html>

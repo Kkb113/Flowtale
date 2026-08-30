@@ -1,0 +1,20 @@
+{
+  "version": 2,
+  "logo": {
+    "url": {
+      "type": 0,
+      "from": "$globalProps.logo",
+      "_val": "https://s3.amazonaws.com/app.sharefable.com/favicon.png"
+    }
+  },
+  "loader": {
+    "url": "",
+    "type": ""
+  },
+  "loadingText": {
+    "type": 0,
+    "from": "$globalProps.demoLoadingText",
+    "_val": "Setting up the interactive demo for you"
+  },
+  "lastUpdatedAtUTC": -1
+}
