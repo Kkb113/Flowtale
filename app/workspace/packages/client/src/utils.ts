@@ -506,12 +506,15 @@ export const getCurrentFlowMain = (
   flows: JourneyFlow[]
 ) : string => {
   let refId = id;
-  while (refId) {
+  const visited = new Set<string>();
+  while (refId && !visited.has(refId)) {
+    visited.add(refId);
     const annotation = getAnnotationByRefId(refId, allAnnotationsForTour);
-    const prevBtn = getAnnotationBtn(annotation!, 'prev');
+    if (!annotation) break;
+    const prevBtn = getAnnotationBtn(annotation, 'prev');
 
     if (!prevBtn.hotspot) {
-      const main = `${annotation!.screenId}/${refId}`;
+      const main = `${annotation.screenId}/${refId}`;
       const flowIndex = flows.findIndex((flow) => flow.main === main);
       if (flowIndex !== -1) {
         return main;

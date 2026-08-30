@@ -431,9 +431,12 @@ export const updateGrpIdForTimelineTillEnd = (
 ): AnnUpdate[] => {
   const updates: AnnUpdate[] = [];
   let ptr = annConfig;
-  while (true) {
+  const visited = new Set<string>();
+  while (ptr && !visited.has(ptr.refId)) {
+    visited.add(ptr.refId);
     const updatedAnn = updateAnnotationGrpId(ptr, grpId);
-    const nextAnnBtn = getAnnotationBtn(updatedAnn, 'next')!;
+    const nextAnnBtn = getAnnotationBtn(updatedAnn, 'next');
+    if (!nextAnnBtn) break;
     // TODO why is actionValue required for groupid updates?
     updates.push({
       config: ptr,
@@ -444,7 +447,9 @@ export const updateGrpIdForTimelineTillEnd = (
     });
     if (!isNavigateHotspot(nextAnnBtn.hotspot)) break;
     const [, nextAnnId] = nextAnnBtn.hotspot!.actionValue._val.split('/');
-    ptr = getAnnotationByRefId(nextAnnId, allAnnotationsForTour)!;
+    const nextAnn = getAnnotationByRefId(nextAnnId, allAnnotationsForTour);
+    if (!nextAnn) break;
+    ptr = nextAnn;
   }
   return updates;
 };
@@ -487,7 +492,9 @@ export const getAnnotationSerialIdMap = (
   let refId = main.split('/')[1];
   const refs = [];
   let idx = 0;
-  while (true) {
+  const visited = new Set<string>();
+  while (refId && !visited.has(refId)) {
+    visited.add(refId);
     const annotation = getAnnotationByRefId(refId, allAnnotationsForTour);
     if (!annotation) break; // sometime main would not point to proper annotation
     refs.push(refId);
@@ -504,16 +511,18 @@ export const getAnnotationSerialIdMap = (
     refId = nextBtn.hotspot!.actionValue._val.split('/')[1];
   }
 
+  const flowLength = refs.length;
+
   for (const annRefId of Object.keys(annotationSerialIdMap)) {
-    annotationSerialIdMap[annRefId].absLen = idx + start + 1;
+    annotationSerialIdMap[annRefId].absLen = start + flowLength;
   }
 
   // Only for current module (instance of map) update the local length
   for (const ref of refs) {
-    annotationSerialIdMap[ref].len = idx + 1;
+    annotationSerialIdMap[ref].len = flowLength;
   }
 
-  return [annotationSerialIdMap, idx + start + 1];
+  return [annotationSerialIdMap, start + flowLength];
 };
 
 export const addNewAnn = (

@@ -1467,6 +1467,20 @@ export function getCtaButtonForNavigation(
   return navigationResult.ctaButton || null;
 }
 
+export function executeDeferredFlowNavigation(
+  navigationResult: FlowNavigationResult | void,
+  nav: NavFn
+): void {
+  navigationResult?.afterCta?.();
+  if (navigationResult?.navigation) {
+    nav(
+      navigationResult.navigation.url,
+      'abs',
+      navigationResult.navigation.openInSameTab
+    );
+  }
+}
+
 export class AnnotationHotspot extends React.PureComponent<HotspotProps> {
   render(): (JSX.Element | null)[] {
     return this.props.data.map((p, idx) => {
@@ -1549,6 +1563,16 @@ export class AnnotationBubble extends React.PureComponent<AnnBubbleProps> {
 }
 
 export class AnnotationCon extends React.PureComponent<IConProps> {
+  private lastNavigationAttempt: { annotationRefId: string; at: number } | null = null;
+
+  shouldIgnoreRepeatedNavigation = (annotationRefId: string): boolean => {
+    const now = Date.now();
+    const isRepeated = this.lastNavigationAttempt?.annotationRefId === annotationRefId
+      && now - this.lastNavigationAttempt.at < 300;
+    this.lastNavigationAttempt = { annotationRefId, at: now };
+    return isRepeated;
+  };
+
   componentDidMount(): void {
     this.props.onCompMount();
   }
@@ -1577,6 +1601,7 @@ export class AnnotationCon extends React.PureComponent<IConProps> {
 
       const navigateToAdjacentAnn: NavigateToAdjacentAnn = (type: 'prev' | 'next' | 'custom', btnId: string): void => {
         const config = p.conf.config;
+        if (this.shouldIgnoreRepeatedNavigation(config.refId)) return;
         // TODO this logic of sending type and btnId and then running a loop to figure out btnConf either by id or by
         // type is weird as a btn can be of only one type and has unique id. Only btnId is sufficient in this case
         const btnConf = type === 'custom'
@@ -1586,13 +1611,24 @@ export class AnnotationCon extends React.PureComponent<IConProps> {
         let newBtnConf = btnConf;
         let annConfig = p.conf.config;
         const navType = btnConf.type;
+        const visitedLeadForms = new Set<string>();
+        let shouldAbortNavigation = false;
         if (this.props.shouldSkipLeadForm && (navType === 'next' || navType === 'prev')) {
           while (this.props.shouldSkipLeadForm) {
             if (!newBtnConf.hotspot || newBtnConf.hotspot.actionType === 'open') {
               break;
             }
             const [goToScreenId, goToAnnId] = newBtnConf.hotspot.actionValue._val.split('/');
+            if (!goToScreenId || !goToAnnId || visitedLeadForms.has(goToAnnId)) {
+              shouldAbortNavigation = true;
+              break;
+            }
+            visitedLeadForms.add(goToAnnId);
             annConfig = this.props.getNextAnnotation(goToAnnId);
+            if (!annConfig) {
+              shouldAbortNavigation = true;
+              break;
+            }
             if (!annConfig.isLeadFormPresent) {
               break;
             } else {
@@ -1600,6 +1636,7 @@ export class AnnotationCon extends React.PureComponent<IConProps> {
             }
           }
         }
+        if (shouldAbortNavigation) return;
 
         if (btnConf.type === 'next') {
           this.props.updateJourneyProgress(annConfig.refId);
@@ -1616,6 +1653,7 @@ export class AnnotationCon extends React.PureComponent<IConProps> {
           }
           const ctaButton = getCtaButtonForNavigation(newBtnConf, navigationResult || undefined);
           if (ctaButton) handleEventLogging(ctaButton);
+          executeDeferredFlowNavigation(navigationResult, this.props.nav);
           return;
         }
 

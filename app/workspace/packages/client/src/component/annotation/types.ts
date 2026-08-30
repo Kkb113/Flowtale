@@ -3,6 +3,11 @@ import { IAnnotationButton, IAnnotationConfig, ITourDataOpts } from '@fable/comm
 export interface FlowNavigationResult {
   handled: boolean;
   ctaButton?: IAnnotationButton;
+  navigation?: {
+    url: string;
+    openInSameTab?: boolean;
+  };
+  afterCta?: () => void;
 }
 
 export type AnnUpdate = {

@@ -217,6 +217,7 @@ interface IOwnStateProps {
   isJourneyMenuOpen: boolean;
   annotationSerialIdMap: AnnotationSerialIdMap;
   currentFlowMain: string;
+  isInitialFlowMainResolved: boolean;
   tourMainValidity: TourMainValidity;
   screenSizeData: Record<string, ScreenSizeData>;
   showRotateScreenModal: boolean;
@@ -274,7 +275,7 @@ interface OnAnnPosUpdate extends Partial<Event> {
   detail?: Payload_AnnotationPos;
 }
 
-class Player extends React.PureComponent<IProps, IOwnStateProps> {
+export class Player extends React.PureComponent<IProps, IOwnStateProps> {
   private adjList: ScreenAdjacencyList | null = null;
 
   private renderSlots: Record<string, number> = {};
@@ -306,8 +307,7 @@ class Player extends React.PureComponent<IProps, IOwnStateProps> {
   private mediaRef: React.MutableRefObject<AnnotationMedia | null> = React.createRef();
 
   private readonly multiAnnotationBranchContext: MultiAnnotationBranchContext = {
-    originAnnotationRefId: null,
-    branchRootAnnotationRefId: null,
+    frames: [],
   };
 
   constructor(props: IProps) {
@@ -321,6 +321,7 @@ class Player extends React.PureComponent<IProps, IOwnStateProps> {
       isJourneyMenuOpen: false,
       annotationSerialIdMap: {},
       currentFlowMain: '',
+      isInitialFlowMainResolved: false,
       screenSizeData: {},
       showRotateScreenModal: false,
       isIOSPhone: getMobileOperatingSystem() === 'iOS',
@@ -682,19 +683,67 @@ class Player extends React.PureComponent<IProps, IOwnStateProps> {
   };
 
   setCurrentFlowMain(anId: string = this.props.match.params.annotationId!): void {
-    const main = getCurrentFlowMain(
+    const flows = this.props.journey?.flows || [];
+    let main = getCurrentFlowMain(
       anId,
       this.props.allAnnotationsForTour,
-      this.props.journey!.flows
+      flows
     );
 
-    if (main !== this.state.currentFlowMain) {
+    if (!main) {
+      const outerOrigin = this.multiAnnotationBranchContext.frames[0];
+      if (outerOrigin) {
+        main = getCurrentFlowMain(
+          outerOrigin.originAnnotationRefId,
+          this.props.allAnnotationsForTour,
+          flows
+        );
+      }
+    }
+
+    const hasFlowMainChanged = main !== this.state.currentFlowMain;
+    const routeAnnotationExists = Boolean(anId && this.props.allAnnotationsForTour
+      .some(group => group.annotations.some(annotation => annotation.refId === anId)));
+    const isInitialFlowMainResolved = this.state.isInitialFlowMainResolved
+      || Boolean(main)
+      || routeAnnotationExists;
+    if (hasFlowMainChanged) {
       emitEvent<Partial<Payload_JourneySwitch>>(InternalEvents.JourneySwitch, {
         fromJourney: this.state.currentFlowMain,
         currentJourney: main,
       });
       this.addJourneyToGlobalData(main);
-      this.setState({ currentFlowMain: main });
+    }
+    if (hasFlowMainChanged || isInitialFlowMainResolved !== this.state.isInitialFlowMainResolved) {
+      this.setState({
+        currentFlowMain: main,
+        isInitialFlowMainResolved
+      });
+    }
+  }
+
+  handleFlowNavigation(btnConfig: IAnnotationButtonType, main?: string): void {
+    if (main !== undefined) {
+      if (this.isJourneyAdded()) this.setCurrentFlowMain(main ? main.split('/')[1] : '');
+      return;
+    }
+
+    const allFlows = this.props.journey?.flows.map(flow => flow.main) || [];
+    const currentFlowMainIndex = allFlows.findIndex(
+      flow => flow === this.state.currentFlowMain
+    );
+    if (btnConfig === 'next' && currentFlowMainIndex < allFlows.length - 1) {
+      this.navFn(allFlows[currentFlowMainIndex + 1], 'annotation-hotspot');
+    } else if (btnConfig === 'prev' && currentFlowMainIndex > 0) {
+      this.navFn(allFlows[currentFlowMainIndex - 1], 'annotation-hotspot');
+    }
+    if ((btnConfig === 'next' || btnConfig === 'custom')
+      && currentFlowMainIndex === allFlows.length - 1
+    ) {
+      window.parent.postMessage({
+        type: 'lastAnnotation',
+        demoRid: this.props.tour!.rid
+      }, '*');
     }
   }
 
@@ -1085,7 +1134,7 @@ class Player extends React.PureComponent<IProps, IOwnStateProps> {
       return false;
     }
 
-    if (this.isJourneyAdded() && !this.state.currentFlowMain) {
+    if (this.isJourneyAdded() && !this.state.isInitialFlowMainResolved) {
       return false;
     }
 
@@ -1130,8 +1179,7 @@ class Player extends React.PureComponent<IProps, IOwnStateProps> {
   };
 
   replayDemo = (): void => {
-    this.multiAnnotationBranchContext.originAnnotationRefId = null;
-    this.multiAnnotationBranchContext.branchRootAnnotationRefId = null;
+    this.multiAnnotationBranchContext.frames = [];
     this.goToMain();
     this.setState({
       previewReplayerKey: Math.random(),
@@ -1262,28 +1310,7 @@ class Player extends React.PureComponent<IProps, IOwnStateProps> {
                   this.getScreenDataPreloaded(screen, this.props.tour!, 1, startScreens, false);
                 }}
                 updateCurrentFlowMain={(btnConfig: IAnnotationButtonType, main?: string) => {
-                  if (main) {
-                    this.setCurrentFlowMain(main.split('/')[1]);
-                    return;
-                  }
-
-                  const allFlows = this.props.journey!.flows.map(flow => flow.main) || [];
-                  const currentFlowMainIndex = allFlows.findIndex(
-                    flow => flow === this.state.currentFlowMain
-                  );
-                  if (btnConfig === 'next' && currentFlowMainIndex < allFlows.length - 1) {
-                    this.navFn(allFlows[currentFlowMainIndex + 1], 'annotation-hotspot');
-                  } else if (btnConfig === 'prev' && currentFlowMainIndex > 0) {
-                    this.navFn(allFlows[currentFlowMainIndex - 1], 'annotation-hotspot');
-                  }
-                  if ((btnConfig === 'next' || btnConfig === 'custom')
-                    && currentFlowMainIndex === this.props.journey!.flows.length - 1
-                  ) {
-                    window.parent.postMessage({
-                      type: 'lastAnnotation',
-                      demoRid: this.props.tour!.rid
-                    }, '*');
-                  }
+                  this.handleFlowNavigation(btnConfig, main);
                 }}
                 closeJourneyMenu={(): void => {
                   if (this.state.isJourneyMenuOpen) { this.setState({ isJourneyMenuOpen: false }); }

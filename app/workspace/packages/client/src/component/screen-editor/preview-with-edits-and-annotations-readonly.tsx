@@ -40,7 +40,6 @@ import {
   getChildElementByFid,
   getFidOfNode,
   getFidOfSerNode,
-  getCurrentFlowMain,
   makeVisibleAllParentsInHierarchy,
   undoMakeVisibleAllParentsInHierarchy,
   debounce,
@@ -102,8 +101,12 @@ export interface IOwnProps {
 }
 
 export interface MultiAnnotationBranchContext {
-  originAnnotationRefId: string | null;
-  branchRootAnnotationRefId: string | null;
+  frames: MultiAnnotationBranchFrame[];
+}
+
+export interface MultiAnnotationBranchFrame {
+  originAnnotationRefId: string;
+  branchRootAnnotationRefId: string;
 }
 
 interface IOwnStateProps {
@@ -130,6 +133,10 @@ export default class ScreenPreviewWithEditsAndAnnotationsReadonly
   private nestedFrames: Array<HTMLIFrameElement> = [];
 
   private hiddenEls: HiddenEls = { displayNoneEls: [], visibilityHiddenEls: [], opacityZeroEls: [] };
+
+  private isBranchTransitionInProgress = false;
+
+  private branchTransitionDestinationRefId: string | null = null;
 
   constructor(props: IOwnProps) {
     super(props);
@@ -195,6 +202,9 @@ export default class ScreenPreviewWithEditsAndAnnotationsReadonly
 
   onFrameAssetLoad = async (): Promise<void> => {
     await scrollIframeEls(this.props.screenData.version, this.embedFrameRef.current?.contentDocument!);
+    if (this.props.toAnnotationId) {
+      this.syncCurrentFlowIdentity(this.props.toAnnotationId);
+    }
     const foundAnnotation = this.reachAnnotation(this.props.toAnnotationId);
     this.props.onFrameAssetLoad({ foundAnnotation });
   };
@@ -301,6 +311,11 @@ export default class ScreenPreviewWithEditsAndAnnotationsReadonly
       opts,
       true,
     );
+    if (this.isBranchTransitionInProgress
+      && this.branchTransitionDestinationRefId === conf.refId
+    ) {
+      this.endBranchTransition();
+    }
   }
 
   componentDidMount(): void {
@@ -323,7 +338,8 @@ export default class ScreenPreviewWithEditsAndAnnotationsReadonly
     if (this.props.playMode) {
       // In player, stop useless rerender leading to flashing
       if (this.props.toAnnotationId && prevProps.toAnnotationId !== this.props.toAnnotationId && !this.props.hidden) {
-        this.syncMultiAnnotationBranchContext(this.props.toAnnotationId);
+        this.endBranchTransition();
+        this.syncCurrentFlowIdentity(this.props.toAnnotationId);
         this.setState({ currentAnn: this.props.toAnnotationId });
         this.reachAnnotation(this.props.toAnnotationId);
       }
@@ -332,6 +348,7 @@ export default class ScreenPreviewWithEditsAndAnnotationsReadonly
       }
 
       if (this.props.hidden && this.props.hidden !== prevProps.hidden) {
+        this.endBranchTransition();
         await this.resetIframe(this.props.screen.rid);
       }
     } else {
@@ -356,6 +373,7 @@ export default class ScreenPreviewWithEditsAndAnnotationsReadonly
   }
 
   componentWillUnmount(): void {
+    this.endBranchTransition();
     clearTimeout(this.timer);
     this.timer = 0;
     this.disposeAndAnnotationLCM();
@@ -622,8 +640,25 @@ export default class ScreenPreviewWithEditsAndAnnotationsReadonly
 
   clearMultiAnnotationBranchContext = (): void => {
     if (!this.props.multiAnnotationBranchContext) return;
-    this.props.multiAnnotationBranchContext.originAnnotationRefId = null;
-    this.props.multiAnnotationBranchContext.branchRootAnnotationRefId = null;
+    this.props.multiAnnotationBranchContext.frames = [];
+  };
+
+  beginBranchTransition = (destinationRefId: string | null = null): boolean => {
+    if (this.isBranchTransitionInProgress) return false;
+    this.isBranchTransitionInProgress = true;
+    this.branchTransitionDestinationRefId = destinationRefId;
+    return true;
+  };
+
+  endBranchTransition = (): void => {
+    this.isBranchTransitionInProgress = false;
+    this.branchTransitionDestinationRefId = null;
+  };
+
+  // eslint-disable-next-line class-methods-use-this
+  getAnnotationRefIdFromDestination = (destination: string): string | null => {
+    const parts = destination.split('/');
+    return parts.length >= 2 && parts[1] ? parts[1] : null;
   };
 
   getLinearFlowRootAnnotation = (annRefId: string): IAnnotationConfigWithScreenId | null => {
@@ -634,80 +669,111 @@ export default class ScreenPreviewWithEditsAndAnnotationsReadonly
       visited.add(ann.refId);
       const prevBtn = getAnnotationBtn(ann, 'prev');
       if (!isNavigateHotspot(prevBtn.hotspot)) return ann;
-      ann = getAnnotationByRefId(
-        prevBtn.hotspot!.actionValue._val.split('/')[1],
-        this.props.allAnnotationsForTour
-      );
+      const prevRefId = this.getAnnotationRefIdFromDestination(prevBtn.hotspot!.actionValue._val);
+      if (!prevRefId) return null;
+      ann = getAnnotationByRefId(prevRefId, this.props.allAnnotationsForTour);
     }
 
     return null;
   };
 
-  isAnnotationInConfiguredFlow = (annRefId: string): boolean => {
-    const configuredFlowMains = new Set([
+  getConfiguredFlowMain = (annRefId: string): string | null => {
+    const configuredFlowMains = [
       this.props.tourDataOpts.main,
       ...this.props.flows.map(flow => flow.main)
-    ].filter(Boolean));
-    const visited = new Set<string>();
-    let ann = getAnnotationByRefId(annRefId, this.props.allAnnotationsForTour);
+    ].filter(Boolean);
 
-    while (ann && !visited.has(ann.refId)) {
-      if (configuredFlowMains.has(`${ann.screenId}/${ann.refId}`)) return true;
-      visited.add(ann.refId);
-      const prevBtn = getAnnotationBtn(ann, 'prev');
-      if (!isNavigateHotspot(prevBtn.hotspot)) return false;
-      ann = getAnnotationByRefId(
-        prevBtn.hotspot!.actionValue._val.split('/')[1],
-        this.props.allAnnotationsForTour
-      );
+    for (const main of configuredFlowMains) {
+      const mainRefId = this.getAnnotationRefIdFromDestination(main);
+      if (!mainRefId) continue;
+      const visited = new Set<string>();
+      let ann = getAnnotationByRefId(mainRefId, this.props.allAnnotationsForTour);
+
+      while (ann && !visited.has(ann.refId)) {
+        if (ann.refId === annRefId) return main;
+        visited.add(ann.refId);
+        const nextBtn = getAnnotationBtn(ann, 'next');
+        if (!isNavigateHotspot(nextBtn.hotspot)) break;
+        const nextRefId = this.getAnnotationRefIdFromDestination(nextBtn.hotspot!.actionValue._val);
+        if (!nextRefId) break;
+        ann = getAnnotationByRefId(nextRefId, this.props.allAnnotationsForTour);
+      }
     }
 
-    return false;
+    return null;
   };
 
-  findMultiAnnotationBranchOrigin = (
-    annRefId: string
-  ): { originAnnotationRefId: string; branchRootAnnotationRefId: string } | null => {
-    if (this.isAnnotationInConfiguredFlow(annRefId)) return null;
+  resolveMultiAnnotationBranchFrames = (
+    annRefId: string,
+    resolving: Set<string> = new Set(),
+    blockedPeers: Set<string> = new Set()
+  ): MultiAnnotationBranchFrame[] | null => {
+    if (blockedPeers.has(annRefId)) return null;
+    if (this.getConfiguredFlowMain(annRefId)) return [];
+    if (resolving.has(annRefId)) return null;
+    const nextResolving = new Set(resolving);
+    nextResolving.add(annRefId);
+
     const branchRoot = this.getLinearFlowRootAnnotation(annRefId);
     if (!branchRoot) return null;
 
-    const origin = getAnnsOfSameMultiAnnGrp(branchRoot.zId, this.props.allAnnotationsForTour)
-      .find(ann => ann.refId !== branchRoot.refId && this.isAnnotationInConfiguredFlow(ann.refId));
-    if (!origin) return null;
-
-    return {
-      originAnnotationRefId: origin.refId,
-      branchRootAnnotationRefId: branchRoot.refId,
-    };
-  };
-
-  syncMultiAnnotationBranchContext = (annRefId: string): void => {
-    const branchContext = this.props.multiAnnotationBranchContext;
-    if (!branchContext) return;
-
-    if (branchContext.originAnnotationRefId || branchContext.branchRootAnnotationRefId) {
-      if (branchContext.originAnnotationRefId
-        && branchContext.branchRootAnnotationRefId
-        && this.isAnnotationOnOriginFlow(annRefId, branchContext.branchRootAnnotationRefId)
-      ) return;
-      this.clearMultiAnnotationBranchContext();
+    const possibleOrigins = getAnnsOfSameMultiAnnGrp(branchRoot.zId, this.props.allAnnotationsForTour)
+      .filter(ann => ann.refId !== branchRoot.refId);
+    const configuredOrigin = possibleOrigins.find(ann => this.getConfiguredFlowMain(ann.refId));
+    if (configuredOrigin) {
+      return [{
+        originAnnotationRefId: configuredOrigin.refId,
+        branchRootAnnotationRefId: branchRoot.refId,
+      }];
     }
 
-    const recoveredContext = this.findMultiAnnotationBranchOrigin(annRefId);
-    if (!recoveredContext) return;
+    for (const possibleOrigin of possibleOrigins) {
+      const blockedForOrigin = new Set(blockedPeers);
+      [branchRoot, ...possibleOrigins].forEach(peer => {
+        if (peer.refId !== possibleOrigin.refId) blockedForOrigin.add(peer.refId);
+      });
+      const outerFrames = this.resolveMultiAnnotationBranchFrames(
+        possibleOrigin.refId,
+        nextResolving,
+        blockedForOrigin
+      );
+      if (outerFrames?.length) {
+        return [
+          ...outerFrames,
+          {
+            originAnnotationRefId: possibleOrigin.refId,
+            branchRootAnnotationRefId: branchRoot.refId,
+          }
+        ];
+      }
+    }
 
-    branchContext.originAnnotationRefId = recoveredContext.originAnnotationRefId;
-    branchContext.branchRootAnnotationRefId = recoveredContext.branchRootAnnotationRefId;
+    return null;
   };
 
-  getBranchContinuationButton = (originAnn: IAnnotationConfigWithScreenId): IAnnotationButton => {
+  syncMultiAnnotationBranchContext = (annRefId: string): MultiAnnotationBranchFrame[] => {
+    const frames = this.resolveMultiAnnotationBranchFrames(annRefId) || [];
+    const branchContext = this.props.multiAnnotationBranchContext;
+    if (branchContext) branchContext.frames = frames;
+    return frames;
+  };
+
+  syncCurrentFlowIdentity = (annRefId: string): void => {
+    const branchFrames = this.syncMultiAnnotationBranchContext(annRefId);
+    const outerOrigin = branchFrames[0];
+    const main = this.getConfiguredFlowMain(
+      outerOrigin?.originAnnotationRefId || annRefId
+    );
+    this.props.updateCurrentFlowMain('custom', main || '');
+  };
+
+  getBranchContinuationButton = (originAnn: IAnnotationConfigWithScreenId): IAnnotationButton | null => {
     let btn = getAnnotationBtn(originAnn, 'next');
     const visited = new Set<string>();
 
     while (this.props.shouldSkipLeadForm && isNavigateHotspot(btn.hotspot)) {
-      const nextAnnRefId = btn.hotspot!.actionValue._val.split('/')[1];
-      if (visited.has(nextAnnRefId)) break;
+      const nextAnnRefId = this.getAnnotationRefIdFromDestination(btn.hotspot!.actionValue._val);
+      if (!nextAnnRefId || visited.has(nextAnnRefId)) return null;
       visited.add(nextAnnRefId);
       const nextAnn = getAnnotationByRefId(nextAnnRefId, this.props.allAnnotationsForTour);
       if (!nextAnn?.isLeadFormPresent) break;
@@ -722,6 +788,7 @@ export default class ScreenPreviewWithEditsAndAnnotationsReadonly
     main?: string,
     effectiveButton?: IAnnotationButton
   ): FlowNavigationResult | void => {
+    if (this.isBranchTransitionInProgress) return { handled: true };
     const currentAnnRefId = this.state.currentAnn;
     this.syncMultiAnnotationBranchContext(currentAnnRefId);
     const branchContext = this.props.multiAnnotationBranchContext;
@@ -730,39 +797,70 @@ export default class ScreenPreviewWithEditsAndAnnotationsReadonly
       ? getAnnotationBtn(currentAnn, btnType)
       : null);
 
-    if (branchContext?.originAnnotationRefId
+    if (branchContext?.frames.length
       && currentAnn
-      && currentAnn.refId !== branchContext.originAnnotationRefId
       && !main
       && (btnType === 'next' || btnType === 'prev')
       && !btn?.hotspot
     ) {
-      const originAnn = getAnnotationByRefId(
-        branchContext.originAnnotationRefId,
-        this.props.allAnnotationsForTour
-      );
       let destination = '';
+      let inheritedOpenButton: IAnnotationButton | null = null;
+      let inheritedTerminalButton: IAnnotationButton | null = null;
 
-      if (originAnn && btnType === 'prev') {
-        destination = `${originAnn.screenId}/${originAnn.refId}`;
-      } else if (originAnn && btnType === 'next') {
-        const originNextBtn = this.getBranchContinuationButton(originAnn);
-        if (isNavigateHotspot(originNextBtn.hotspot)) {
-          destination = originNextBtn.hotspot!.actionValue._val;
-        } else if (originNextBtn.hotspot?.actionType === 'open') {
-          const { actionValue, openInSameTab } = originNextBtn.hotspot;
-          this.clearMultiAnnotationBranchContext();
-          this.props.updateCurrentFlowMain(btnType, main);
-          this.props.navigate(actionValue._val, 'abs', openInSameTab);
-          return { handled: true, ctaButton: originNextBtn };
+      if (btnType === 'prev') {
+        const immediateOrigin = branchContext.frames[branchContext.frames.length - 1];
+        const originAnn = getAnnotationByRefId(
+          immediateOrigin.originAnnotationRefId,
+          this.props.allAnnotationsForTour
+        );
+        if (originAnn) destination = `${originAnn.screenId}/${originAnn.refId}`;
+      } else {
+        for (let idx = branchContext.frames.length - 1; idx >= 0; idx--) {
+          const originAnn = getAnnotationByRefId(
+            branchContext.frames[idx].originAnnotationRefId,
+            this.props.allAnnotationsForTour
+          );
+          if (!originAnn) continue;
+          const originNextBtn = this.getBranchContinuationButton(originAnn);
+          if (!originNextBtn) return { handled: true };
+          if (isNavigateHotspot(originNextBtn.hotspot)) {
+            destination = originNextBtn.hotspot!.actionValue._val;
+            break;
+          }
+          if (originNextBtn.hotspot?.actionType === 'open') {
+            inheritedOpenButton = originNextBtn;
+            break;
+          }
+          inheritedTerminalButton = originNextBtn;
         }
       }
 
-      this.clearMultiAnnotationBranchContext();
       if (destination) {
         this.applyDiffAndGoToAnn(currentAnn.refId, destination);
         return { handled: true };
       }
+
+      if (inheritedOpenButton?.hotspot?.actionType === 'open') {
+        if (!this.beginBranchTransition()) return { handled: true };
+        const { actionValue, openInSameTab } = inheritedOpenButton.hotspot;
+        return {
+          handled: true,
+          ctaButton: inheritedOpenButton,
+          navigation: { url: actionValue._val, openInSameTab },
+          afterCta: () => {
+            this.clearMultiAnnotationBranchContext();
+            this.props.updateCurrentFlowMain(btnType, main);
+            this.endBranchTransition();
+          }
+        };
+      }
+
+      if (!this.beginBranchTransition()) return { handled: true };
+      this.clearMultiAnnotationBranchContext();
+      this.props.updateCurrentFlowMain(btnType, main);
+      return inheritedTerminalButton
+        ? { handled: true, ctaButton: inheritedTerminalButton }
+        : undefined;
     }
 
     if (main || btn?.hotspot?.actionType === 'open') {
@@ -774,30 +872,8 @@ export default class ScreenPreviewWithEditsAndAnnotationsReadonly
 
   updateJourneyProgress = (annRefId: string): void => {
     this.syncMultiAnnotationBranchContext(annRefId);
-    const originAnnotationRefId = this.props.multiAnnotationBranchContext?.originAnnotationRefId;
+    const originAnnotationRefId = this.props.multiAnnotationBranchContext?.frames[0]?.originAnnotationRefId;
     this.props.updateJourneyProgress(originAnnotationRefId || annRefId);
-  };
-
-  updateMultiAnnotationBranchForDestination = (annRefId: string): void => {
-    this.syncMultiAnnotationBranchContext(annRefId);
-  };
-
-  isAnnotationOnOriginFlow = (annRefId: string, originAnnRefId: string): boolean => {
-    const visited = new Set<string>();
-    let ann = getAnnotationByRefId(annRefId, this.props.allAnnotationsForTour);
-
-    while (ann && !visited.has(ann.refId)) {
-      if (ann.refId === originAnnRefId) return true;
-      visited.add(ann.refId);
-      const prevBtn = getAnnotationBtn(ann, 'prev');
-      if (!isNavigateHotspot(prevBtn.hotspot)) return false;
-      ann = getAnnotationByRefId(
-        prevBtn.hotspot!.actionValue._val.split('/')[1],
-        this.props.allAnnotationsForTour
-      );
-    }
-
-    return false;
   };
 
   applyDiffAndGoToAnn: ApplyDiffAndGoToAnn = async (
@@ -805,7 +881,21 @@ export default class ScreenPreviewWithEditsAndAnnotationsReadonly
     goToAnnIdWithScreenId: string,
   ) => {
     const [goToScreenId, goToAnnId] = goToAnnIdWithScreenId.split('/');
-    this.updateMultiAnnotationBranchForDestination(goToAnnId);
+    if (!goToScreenId || !goToAnnId || !this.beginBranchTransition(goToAnnId)) return;
+    try {
+      await this.performDiffAndGoToAnn(currAnnId, goToAnnIdWithScreenId);
+    } catch (err) {
+      this.endBranchTransition();
+      throw err;
+    }
+  };
+
+  performDiffAndGoToAnn: ApplyDiffAndGoToAnn = async (
+    currAnnId: string,
+    goToAnnIdWithScreenId: string,
+  ) => {
+    const [goToScreenId, goToAnnId] = goToAnnIdWithScreenId.split('/');
+    this.syncCurrentFlowIdentity(goToAnnId);
     this.setState({ currentAnn: goToAnnId });
     const { screenId: currScreenId } = getAnnotationByRefId(currAnnId, this.props.allAnnotationsForTour)!;
 
@@ -1010,12 +1100,10 @@ export default class ScreenPreviewWithEditsAndAnnotationsReadonly
   };
 
   navigateToAnnByRefIdOnSameScreen: NavToAnnByRefIdFn = (annRefId) => {
-    const main = getCurrentFlowMain(annRefId, this.props.allAnnotationsForTour, this.props.flows);
-    this.syncMultiAnnotationBranchContext(annRefId);
+    this.syncCurrentFlowIdentity(annRefId);
 
     if (this.props.playMode) this.setState({ currentAnn: annRefId });
     this.reachAnnotation(annRefId);
-    if (main) this.props.updateCurrentFlowMain('custom', main);
   };
 
   render(): JSX.Element {
