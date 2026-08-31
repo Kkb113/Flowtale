@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.sharefable.api.common.AssetFilePath;
+import com.sharefable.api.common.EditRevisionGuard;
 import com.sharefable.api.common.FnScreenBuilder;
 import com.sharefable.api.common.Utils;
 import com.sharefable.api.config.AppSettings;
@@ -285,7 +286,10 @@ public class ScreenService extends ServiceBase {
 
   @Transactional
   public RespScreen updateEditForScreen(ReqRecordEdit body, User userEntity) {
-    Screen screen = getEntityByRIdWithAuthValidation(Screen.class, body.rid(), userEntity);
+    Screen screen = screenRepo.findByRidForUpdate(body.rid())
+      .map(entity -> validateEntityWithAuth(entity, body.rid(), userEntity))
+      .orElseThrow(() -> new ResponseStatusException(HttpStatus.FORBIDDEN, ""));
+    EditRevisionGuard.assertCurrent(screen.getUpdatedAt(), body.expectedRevision());
 
     uploadDataFileToS3(
       body.editData(),

@@ -43,12 +43,12 @@ import {
   rgbToHex,
   getImgScreenData,
   createLiteralProperty,
-  SAMPLE_ANN_CONFIG_TEXT,
   getSampleJourneyData
 } from '@fable/common/dist/utils';
 import { nanoid } from 'nanoid';
 import { sentryCaptureException } from '@fable/common/dist/sentry';
 import raiseDeferredError from '@fable/common/dist/deferred-error';
+import { normalizeTourDataDocument } from '@fable/common/dist/tour-data-normalizer';
 import {
   CreateNewDemoV1,
   DemoMetadata,
@@ -66,6 +66,7 @@ import { create_guides_step_by_step } from '@fable/common/dist/llm-fn-schema/cre
 import { create_guides_marketing } from '@fable/common/dist/llm-fn-schema/create_guides_marketing';
 import { demo_metadata } from '@fable/common/dist/llm-fn-schema/demo_metadata';
 import { isValidThemeColor } from './theme-colors';
+import { DemoCreationMode, getCreationModeDefaults } from './creation-mode';
 import {
   AiData,
   AiItem,
@@ -92,7 +93,7 @@ import {
   uploadMarkedImageToAws
 } from '../../upload-media-to-aws';
 import { DemoState, Vpd } from '../../types';
-import { SAMPLE_AI_ANN_CONFIG_TEXT, SURVEY_ID, THEME_BASE_IMAGE_URL } from '../../constants';
+import { SURVEY_ID, THEME_BASE_IMAGE_URL } from '../../constants';
 
 export function getNodeFromDocTree(docTree: SerNode, nodeName: string): SerNode | null {
   const queue: SerNode[] = [docTree];
@@ -118,7 +119,7 @@ export async function saveAsTour(
   globalOpts: IGlobalConfig,
   aiThemeData: suggest_guide_theme | null,
   selectedPallete: 'ai' | 'global' | null,
-  creationMode: 'ai'|'manual',
+  creationMode: DemoCreationMode,
   anonymousDemoId: string,
   productDetails: string,
   demoObjective: string,
@@ -155,9 +156,7 @@ export async function saveAsTour(
     annStyle.borderColor = aiThemeData.borderColor;
   }
   // for save in existing tour we need to show overlay
-  if (creationMode === 'ai') {
-    annStyle.showOverlay = true;
-  }
+  annStyle.showOverlay = getCreationModeDefaults(creationMode).showOverlay;
 
   const { tourDataFile, tourRid } = await addAnnotationConfigs(
     screens,
@@ -256,7 +255,7 @@ async function addAnnotationConfigs(
   tourDescription: string,
   globalOpts: IGlobalConfig,
   annStyle: AnnotationStyle,
-  creationMode: 'ai' | 'manual',
+  creationMode: DemoCreationMode,
   anonymousDemoId: string,
   productDetails: string,
   demoObjective: string,
@@ -273,9 +272,11 @@ async function addAnnotationConfigs(
 
   if (existingTour) {
     tourRid = existingTour.rid;
-    tourDataFile = await api<null, TourData>(existingTour.dataFileUri.href);
-    if (!tourDataFile.opts) tourDataFile.opts = getDefaultTourOpts(globalOpts);
-    if (!tourDataFile.diagnostics) tourDataFile.diagnostics = {};
+    const rawTourData = await api<null, TourData>(existingTour.dataFileUri.href);
+    tourDataFile = normalizeTourDataDocument(rawTourData, {
+      opts: getDefaultTourOpts(globalOpts),
+      journey: getSampleJourneyData(globalOpts),
+    });
   } else {
     let settings = null;
     let thumbnail = null;
@@ -310,7 +311,7 @@ async function addAnnotationConfigs(
     }
     const screenAiData = screenInfo[i].aiAnnotationData;
     const annotationText = screenAiData && screenAiData.text ? screenAiData.text
-      : creationMode === 'manual' ? SAMPLE_ANN_CONFIG_TEXT : SAMPLE_AI_ANN_CONFIG_TEXT;
+      : getCreationModeDefaults(creationMode).fallbackAnnotationText;
 
     const nextBtnText = screenAiData?.nextButtonText || undefined;
 

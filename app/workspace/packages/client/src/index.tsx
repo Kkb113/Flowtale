@@ -32,7 +32,10 @@ function addChargebeeScript(): void {
   document.head.appendChild(script);
 }
 
-if (document.location.pathname !== '/aboutblank') {
+const isPhase0Characterization = process.env.NODE_ENV !== 'production'
+  && document.location.pathname === '/__phase0/editor';
+
+if (document.location.pathname !== '/aboutblank' && !isPhase0Characterization) {
   console.log(`Version: ${packageJSON.version}`);
 
   try {
@@ -139,6 +142,14 @@ const router = createBrowserRouter([
         path: '/aboutblank',
         element: <div />
       },
+      ...(process.env.NODE_ENV !== 'production' ? [{
+        path: '/__phase0/editor',
+        async lazy() {
+          const Phase0Characterization = await import('./container/phase0-characterization')
+            .then(module => module.default);
+          return { Component: Phase0Characterization };
+        },
+      }] : []),
       {
         path: '/tours',
         element: <Navigate to="/demos" />

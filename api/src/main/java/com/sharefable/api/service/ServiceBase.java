@@ -185,20 +185,25 @@ public abstract class ServiceBase implements DefaultThumbnail {
       throw new ResponseStatusException(HttpStatus.FORBIDDEN, "");
     }
 
+    return validateEntityWithAuth(cls.cast(maybeEntity.get()), rid, user);
+  }
+
+  protected <T extends EntityBaseWithOwnership> T validateEntityWithAuth(T entity, String rid, User user) {
+    String entityType = entity instanceof Screen ? "screen" : "tour";
+
     if (entityType.equals("tour")) {
-      DemoEntity demoEntity = (DemoEntity) maybeEntity.get();
+      DemoEntity demoEntity = (DemoEntity) entity;
       if (demoEntity.getDeleted() == TourDeleted.DELETED) {
         throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Tour with rid " + rid + " is not found");
       }
     }
 
-    EntityBaseWithOwnership entity = maybeEntity.get();
     if (!Objects.equals(entity.getBelongsToOrg(), user.getBelongsToOrg())) {
       log.error("Can't update edit or retrieve analytics for {} {} as it's belong to different org. Requested by user {}, belongs to org {}",
         entityType, rid, user.getId(), entity.getBelongsToOrg());
       throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Not enough permission");
     }
-    return (T) entity;
+    return entity;
   }
 
   public enum DATA_FILE_TYPE {

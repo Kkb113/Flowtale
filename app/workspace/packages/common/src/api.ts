@@ -8,7 +8,24 @@ const JOB_ENDPOINT = process.env.REACT_APP_JOB_ENDPOINT as string;
 const API_VERSION = '/v1';
 const BEHIND_AUTH = '/f';
 
-// TODO handle common error here like 500, 403, 401 etc
+export class ApiRequestError extends Error {
+  readonly status: number;
+
+  readonly responseBody: unknown;
+
+  constructor(status: number, message: string, responseBody: unknown) {
+    super(message);
+    this.name = 'ApiRequestError';
+    this.status = status;
+    this.responseBody = responseBody;
+    Object.setPrototypeOf(this, ApiRequestError.prototype);
+  }
+}
+
+export function isApiConflict(error: unknown): error is ApiRequestError {
+  return error instanceof ApiRequestError && error.status === 409;
+}
+
 export default async function api<T, M>(
   url: string,
   payload?: {
@@ -77,22 +94,39 @@ export default async function api<T, M>(
     });
   }
 
-  if ((resp.status === 401 || resp.status === 403) && path.startsWith(apiPath)) {
-    // take user to logout page
-    let reason: UnauthorizedReason | undefined;
+  if (!resp.ok) {
+    let responseBody: unknown = null;
+    let message = `Request failed with status ${resp.status}`;
     try {
-      const data = await resp.json();
-      const msg = JSON.parse(data.message);
-      reason = msg.r;
+      const textBody = await resp.text();
+      if (textBody) {
+        try {
+          responseBody = JSON.parse(textBody);
+        } catch (e) {
+          responseBody = textBody;
+        }
+      }
+      if (typeof responseBody === 'object' && responseBody !== null && 'message' in responseBody) {
+        message = String((responseBody as {message: unknown}).message);
+      }
     } catch (e) {
-      /* noop */
+      /* keep the status-based message */
     }
-    console.log('>> reason', reason);
-    window.location.replace(`/logout?t=${LogoutType.APINotAutorized}&r=${reason || ''}`);
-  }
 
-  if (resp.status >= 500) {
-    throw new Error('Probable server error');
+    if ((resp.status === 401 || resp.status === 403) && path.startsWith(apiPath)) {
+      // take user to logout page
+      let reason: UnauthorizedReason | undefined;
+      try {
+        const rawMessage = (responseBody as {message?: string})?.message;
+        reason = rawMessage ? JSON.parse(rawMessage).r : undefined;
+      } catch (e) {
+        /* noop */
+      }
+      console.log('>> reason', reason);
+      window.location.replace(`/logout?t=${LogoutType.APINotAutorized}&r=${reason || ''}`);
+    }
+
+    throw new ApiRequestError(resp.status, message, responseBody);
   }
 
   if (payload?.noRespExpected) {

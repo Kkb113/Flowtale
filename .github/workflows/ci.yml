@@ -79,6 +79,14 @@ jobs:
           CI: "true"
         run: yarn workspace @fable/client test --watchAll=false --runInBand
 
+      - name: Install Playwright Chromium
+        run: yarn test:e2e:install --with-deps
+
+      - name: Run editor browser characterization
+        env:
+          CI: "true"
+        run: yarn test:e2e
+
       - name: Test extension
         run: yarn workspace @fable/ext-tour test --runInBand
 

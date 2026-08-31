@@ -177,7 +177,7 @@ export interface TourDataWoScheme {
 }
 
 export interface TourData extends TourDataWoScheme {
-  v: SchemaVersion;
+  v: SchemaVersion | 1 | 2;
   lastUpdatedAtUtc: number;
 }
 

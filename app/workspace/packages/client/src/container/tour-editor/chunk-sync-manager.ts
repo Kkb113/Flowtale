@@ -1,12 +1,63 @@
 import { getRandomId } from '@fable/common/dist/utils';
 import raiseDeferredError from '@fable/common/dist/deferred-error';
+import { isApiConflict } from '@fable/common/dist/api';
 
 export enum SyncTarget {
   LocalStorage,
 }
 
 interface CB {
-  onSyncNeeded: <T extends Record<string, any>>(key: string, value: T) => void;
+  onSyncNeeded: <T extends Record<string, any>>(
+    key: string,
+    value: T,
+    expectedRevision?: number
+  ) => Promise<SyncAcknowledgement | void>;
+  onStatusChange?: (status: SyncStatus) => void;
+  onAcknowledged?: (key: string, acknowledgement: SyncAcknowledgement) => void;
+}
+
+export interface SyncAcknowledgement {
+  revision?: number;
+}
+
+interface JournalEntry<T> {
+  __fableJournalVersion: 1;
+  value: T;
+  expectedRevision?: number;
+}
+
+function isJournalEntry<T>(value: T | JournalEntry<T>): value is JournalEntry<T> {
+  return !!value
+    && typeof value === 'object'
+    && '__fableJournalVersion' in value
+    && value.__fableJournalVersion === 1;
+}
+
+function readJournalEntry<T>(serialized: string): {value: T, expectedRevision?: number} {
+  const parsed = JSON.parse(serialized) as T | JournalEntry<T>;
+  if (isJournalEntry(parsed)) {
+    return { value: parsed.value, expectedRevision: parsed.expectedRevision };
+  }
+  return { value: parsed };
+}
+
+function writeJournalEntry<T>(value: T, expectedRevision?: number): string {
+  if (expectedRevision === undefined) return JSON.stringify(value);
+  const entry: JournalEntry<T> = {
+    __fableJournalVersion: 1,
+    value,
+    expectedRevision,
+  };
+  return JSON.stringify(entry);
+}
+
+export type SyncStatusType = 'idle' | 'saving' | 'saved' | 'retrying' | 'conflict';
+
+export interface SyncStatus {
+  type: SyncStatusType;
+  key?: string;
+  attempt?: number;
+  error?: Error;
 }
 
 const enum TxState {
@@ -64,8 +115,6 @@ export class Tx {
 }
 
 export default class ChunkSyncManager {
-  private readonly target: SyncTarget;
-
   private readonly lookupKeys: Record<string, 1> = {};
 
   private readonly lookupKeyLike: string;
@@ -78,24 +127,39 @@ export default class ChunkSyncManager {
 
   private readonly cb: CB;
 
+  private isPolling = false;
+
+  private readonly retries: Record<string, {attempt: number, nextAttemptAt: number}> = {};
+
+  private readonly conflicts: Record<string, 1> = {};
+
   constructor(target: SyncTarget, lookupKeyLike: string, cb: CB, pollingInterval = 3000) {
-    this.target = target;
+    if (target !== SyncTarget.LocalStorage) throw new Error(`Unsupported sync target: ${target}`);
     this.interval = pollingInterval;
     this.cb = cb;
     this.lookupKeyLike = lookupKeyLike;
   }
 
-  add<K, T>(key: string, value: T, updateFn: (storedVal: K | null, v: T) => K, tx?: Tx): K | null {
+  add<K, T>(
+    key: string,
+    value: T,
+    updateFn: (storedVal: K | null, v: T) => K,
+    tx?: Tx,
+    expectedRevision?: number
+  ): K | null {
     const origKey = key;
     if (tx) {
       key = `tx/${key}`;
     } else if (!(key in this.lookupKeys)) {
       this.lookupKeys[key] = 1;
     }
+    delete this.conflicts[origKey];
+    delete this.retries[origKey];
 
     const storedVal = localStorage.getItem(key);
-    const newVal = updateFn(storedVal === null ? null : JSON.parse(storedVal), value);
-    localStorage.setItem(key, JSON.stringify(newVal));
+    const storedEntry = storedVal === null ? null : readJournalEntry<K>(storedVal);
+    const newVal = updateFn(storedEntry?.value ?? null, value);
+    localStorage.setItem(key, writeJournalEntry(newVal, storedEntry?.expectedRevision ?? expectedRevision));
     if (tx) {
       tx.onFinish(this.onTxFinish, [key, origKey, updateFn]);
       return null;
@@ -104,16 +168,20 @@ export default class ChunkSyncManager {
   }
 
   // eslint-disable-next-line class-methods-use-this
-  onTxFinish = (tx: Tx, stagingKey: string, origKey: string, mergeFn: <K, T>(storedVal: K | null, v: T) => K): void => {
-    const storedStagingVal = JSON.parse(localStorage.getItem(stagingKey)!);
+  onTxFinish = <K>(tx: Tx, stagingKey: string, origKey: string, mergeFn: (storedVal: K | null, v: K) => K): void => {
+    const storedStagingVal = readJournalEntry<K>(localStorage.getItem(stagingKey)!);
     localStorage.removeItem(stagingKey);
 
     if (!(origKey in this.lookupKeys)) this.lookupKeys[origKey] = 1;
 
     const storedVal = localStorage.getItem(origKey);
-    const mergedVal = mergeFn(storedVal === null ? null : JSON.parse(storedVal), storedStagingVal);
+    const storedEntry = storedVal === null ? null : readJournalEntry<K>(storedVal);
+    const mergedVal = mergeFn(storedEntry?.value ?? null, storedStagingVal.value);
 
-    localStorage.setItem(origKey, JSON.stringify(mergedVal));
+    localStorage.setItem(
+      origKey,
+      writeJournalEntry(mergedVal, storedEntry?.expectedRevision ?? storedStagingVal.expectedRevision)
+    );
     tx.setData(mergedVal);
   };
 
@@ -123,7 +191,7 @@ export default class ChunkSyncManager {
     }
     this.isStarted = true;
     if (!this.timer) {
-      this.timer = setInterval(this.poll, this.interval) as unknown as number;
+      this.timer = window.setInterval(() => { this.poll(); }, this.interval);
     }
     let len = localStorage.length;
     while (len--) {
@@ -135,33 +203,81 @@ export default class ChunkSyncManager {
           localStorage.removeItem(key);
         } else {
           this.lookupKeys[key] = 1;
-          const parsedVal = JSON.parse(val) as K;
-          // TODO report this data to sentry
-          console.info('Trying to flush cached edit', key, JSON.parse(val));
-          onLocalEditsLeft(key, parsedVal);
-          localStorage.removeItem(key);
-          delete this.lookupKeys[key];
+          try {
+            const entry = readJournalEntry<K>(val);
+            onLocalEditsLeft(key, entry.value);
+          } catch (error) {
+            this.setStatus({ type: 'retrying', key, attempt: 0, error: error as Error });
+          }
         }
       }
     }
   }
 
-  // TODO this function does not wait to check if the server has failed to receive the data
-  //      Edits could be lost when there if the server is not available
-  poll = (): void => {
+  private setStatus(status: SyncStatus): void {
+    this.cb.onStatusChange?.(status);
+  }
+
+  rebaseExpectedRevisions(predicate: (key: string) => boolean, revision: number): void {
+    Object.keys(this.lookupKeys).filter(predicate).forEach(key => {
+      const serialized = localStorage.getItem(key);
+      if (!serialized) return;
+      const entry = readJournalEntry<Record<string, any>>(serialized);
+      localStorage.setItem(key, writeJournalEntry(entry.value, revision));
+    });
+  }
+
+  poll = async (): Promise<void> => {
+    if (this.isPolling) return;
+    this.isPolling = true;
     for (const key of Object.keys(this.lookupKeys)) {
+      if (this.conflicts[key]) continue;
+      const retry = this.retries[key];
+      if (retry && retry.nextAttemptAt > Date.now()) continue;
       const val = localStorage.getItem(key);
-      if (val) {
-        this.cb.onSyncNeeded(key, JSON.parse(val));
+      if (!val) {
+        delete this.lookupKeys[key];
+        delete this.retries[key];
+        continue;
       }
-      localStorage.removeItem(key);
-      delete this.lookupKeys[key];
+
+      try {
+        const entry = readJournalEntry<Record<string, any>>(val);
+        this.setStatus({ type: 'saving', key, attempt: (retry?.attempt || 0) + 1 });
+        const acknowledgement = await this.cb.onSyncNeeded(key, entry.value, entry.expectedRevision);
+        if (localStorage.getItem(key) === val) {
+          localStorage.removeItem(key);
+          delete this.lookupKeys[key];
+        } else if (acknowledgement?.revision !== undefined) {
+          const pendingEntry = readJournalEntry<Record<string, any>>(localStorage.getItem(key)!);
+          localStorage.setItem(key, writeJournalEntry(pendingEntry.value, acknowledgement.revision));
+        }
+        if (acknowledgement) this.cb.onAcknowledged?.(key, acknowledgement);
+        delete this.retries[key];
+        this.setStatus({ type: 'saved', key });
+      } catch (error) {
+        const typedError = error instanceof Error ? error : new Error(String(error));
+        if (isApiConflict(error)) {
+          this.conflicts[key] = 1;
+          this.setStatus({ type: 'conflict', key, error: typedError });
+        } else {
+          const attempt = (retry?.attempt || 0) + 1;
+          this.retries[key] = {
+            attempt,
+            nextAttemptAt: Date.now() + Math.min(this.interval * (2 ** (attempt - 1)), 30000),
+          };
+          this.setStatus({ type: 'retrying', key, attempt, error: typedError });
+        }
+        break;
+      }
     }
+    this.isPolling = false;
+    if (Object.keys(this.lookupKeys).length === 0) this.setStatus({ type: 'idle' });
   };
 
-  end(): void {
+  end(): Promise<void> {
     clearInterval(this.timer);
     this.timer = 0;
-    this.poll();
+    return this.poll();
   }
 }

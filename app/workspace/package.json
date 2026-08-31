@@ -14,5 +14,12 @@
     "type": "git",
     "url": "git+ssh://git@github.com:sharefable/app.git"
   },
+  "devDependencies": {
+    "@playwright/test": "1.62.1"
+  },
+  "scripts": {
+    "test:e2e": "node ./node_modules/@playwright/test/cli.js test",
+    "test:e2e:install": "node ./node_modules/@playwright/test/cli.js install chromium"
+  },
   "packageManager": "yarn@1.22.22+sha1.ac34549e6aa8e7ead463a7407e1c7390f61a6610"
 }

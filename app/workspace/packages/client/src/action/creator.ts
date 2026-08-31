@@ -77,7 +77,9 @@ import {
   createLiteralProperty,
   deepcopy,
   getCurrentUtcUnixTime,
+  getDefaultTourOpts,
   getImgScreenData,
+  getSampleJourneyData,
   isLocalFullAccessEnabled,
   normalizeGlobalConfig,
 } from '@fable/common/dist/utils';
@@ -85,10 +87,12 @@ import { Dispatch } from 'react';
 import { setUser } from '@sentry/react';
 import { sentryCaptureException } from '@fable/common/dist/sentry';
 import raiseDeferredError from '@fable/common/dist/deferred-error';
+import { normalizeTourDataDocument } from '@fable/common/dist/tour-data-normalizer';
 import { update_demo_content } from '@fable/common/dist/llm-fn-schema/update_demo_content';
 import { root_router } from '@fable/common/dist/llm-fn-schema/root_router';
 import { RootRouterReq, guide_theme, UpdateDemoContentV1 } from '@fable/common/dist/llm-contract';
 import { ToolUseBlockParam } from '@anthropic-ai/sdk/resources';
+import { getSingleAnnotationContext } from './ai-context';
 import {
   convertEditsToLineItems,
   getThemeAndAnnotationFromDataFile,
@@ -1134,7 +1138,11 @@ export function loadTourAnnotationsAndDatasets(
       loadPublished ? data.data : undefined
     );
 
-    const tourData = await api<null, TourData>(processedTour.dataFileUri.href);
+    const rawTourData = await api<null, TourData>(processedTour.dataFileUri.href);
+    const tourData = normalizeTourDataDocument(rawTourData, {
+      opts: getDefaultTourOpts(processedTour.globalOpts),
+      journey: getSampleJourneyData(processedTour.globalOpts),
+    });
     const annotationAndOpts = getThemeAndAnnotationFromDataFile(tourData, processedTour.globalOpts, false);
     const annotations = annotationAndOpts.annotations;
 
@@ -1240,7 +1248,11 @@ export function loadTourAndData(
       globalConfig: tour.globalOpts
     });
 
-    const data = await api<null, TourData>(tour!.dataFileUri.href);
+    const rawData = await api<null, TourData>(tour!.dataFileUri.href);
+    const data = normalizeTourDataDocument(rawData, {
+      opts: getDefaultTourOpts(tour.globalOpts),
+      journey: getSampleJourneyData(tour.globalOpts),
+    });
     const annotationAndOpts = getThemeAndAnnotationFromDataFile(data, tour.globalOpts, false,);
 
     let annotations = annotationAndOpts.annotations;
@@ -1388,82 +1400,120 @@ export function saveGlobalEditChunks(editChunks: GlobalEditFile['edits']) {
   };
 }
 
-export function flushEditChunksToMasterFile(screenRidIdStr: string, localEdits: AllEdits<ElEditType>) {
-  return async (dispatch: Dispatch<TSaveEditChunks | TAutosaving>, getState: () => TState) => {
+export function getExpectedRevision(value: Date | string | number | null | undefined): number | undefined {
+  if (value === null || value === undefined) return undefined;
+  const revision = new Date(value).getTime();
+  return Number.isFinite(revision) ? revision : undefined;
+}
+
+export function flushEditChunksToMasterFile(
+  screenRidIdStr: string,
+  localEdits: AllEdits<ElEditType>,
+  expectedRevision?: number
+) {
+  return async (dispatch: Dispatch<TSaveEditChunks | TAutosaving | TScreenUpdate>, getState: () => TState) => {
     const [id, ...rid] = screenRidIdStr.split('/');
     const screenId = +id;
     const screenRid = rid.join('/');
-    const savedEditData = getState().default.screenEdits[screenId];
-    const savedScreenData = getState().default.screenData[screenId];
-    const currScreenRid = getState().default.currentScreen?.rid;
-    if (savedEditData && savedScreenData) {
-      let masterEdit = savedEditData?.edits;
-      if (masterEdit) {
-        if (masterEdit instanceof Array) {
-          // WARN this is only for the cases where screens are created earlier with edit.json file having wrong format
-          // for edits key
-          masterEdit = {};
-        }
-        savedEditData.lastUpdatedAtUtc = getCurrentUtcUnixTime();
-        savedEditData.edits = mergeEdits(masterEdit, localEdits);
-
-        const screenResp = await api<ReqRecordEdit, ApiResp<RespScreen>>('/recordeledit', {
-          auth: true,
-          body: {
-            rid: screenRid,
-            editData: JSON.stringify(savedEditData),
-          },
-        });
-
-        if (currScreenRid === screenRidIdStr.split('/')[1]) {
-          dispatch({
-            type: ActionType.SAVE_EDIT_CHUNKS,
-            screenId,
-            editList: convertEditsToLineItems(savedEditData.edits, false, savedScreenData.docTree),
-            editFile: savedEditData,
-            isLocal: false,
-          });
-        }
+    try {
+      const currentState = getState().default;
+      const savedEditData = currentState.screenEdits[screenId];
+      const savedScreenData = currentState.screenData[screenId];
+      if (!savedEditData || !savedScreenData) {
+        throw new Error(`Screen ${screenRid} is not loaded; its cached edits remain queued`);
       }
-    }
+      let masterEdit = savedEditData.edits;
+      if (masterEdit instanceof Array) {
+        // Legacy edit files briefly stored `edits` as an array. Treat those as empty without mutating Redux state.
+        masterEdit = {};
+      }
+      const nextEditData = {
+        ...savedEditData,
+        lastUpdatedAtUtc: getCurrentUtcUnixTime(),
+        edits: mergeEdits(masterEdit, localEdits),
+      };
+      const screen = currentState.allScreens.find(item => item.id === screenId || item.rid === screenRid)
+        || currentState.currentScreen;
+      const screenResp = await api<ReqRecordEdit, ApiResp<RespScreen>>('/recordeledit', {
+        auth: true,
+        body: {
+          rid: screenRid,
+          editData: JSON.stringify(nextEditData),
+          expectedRevision: expectedRevision ?? getExpectedRevision(screen?.updatedAt),
+        },
+      });
 
-    dispatch({
-      type: ActionType.AUTOSAVING,
-      isAutosaving: false
-    });
+      dispatch({
+        type: ActionType.SAVE_EDIT_CHUNKS,
+        screenId,
+        editList: convertEditsToLineItems(nextEditData.edits, false, savedScreenData.docTree),
+        editFile: nextEditData,
+        isLocal: false,
+      });
+      dispatch({
+        type: ActionType.SCREEN_UPDATE,
+        updatedScreen: processRawScreenData(screenResp.data, getState().default.commonConfig!),
+      });
+      return getExpectedRevision(screenResp.data.updatedAt);
+    } finally {
+      dispatch({
+        type: ActionType.AUTOSAVING,
+        isAutosaving: false
+      });
+    }
   };
 }
 
-export function flushGlobalEditChunksToMasterFile(tourRid: string, localEdits: AllGlobalElEdits<ElEditType>) {
-  return async (dispatch: Dispatch<TSaveGlobalEditChunks | TAutosaving>, getState: () => TState) => {
-    const savedEditData = getState().default.globalEditFile;
-    if (savedEditData) {
-      const masterEdit = savedEditData?.edits;
-      if (masterEdit) {
-        savedEditData.lastUpdatedAtUtc = getCurrentUtcUnixTime();
-        savedEditData.edits = mergeGlobalEdits(masterEdit, localEdits);
-
-        const tourResp = await api<ReqRecordEdit, ApiResp<RespDemoEntity>>('/recordtrgbedit', {
-          auth: true,
-          body: {
-            rid: tourRid,
-            editData: JSON.stringify(savedEditData),
-          },
-        });
-
-        dispatch({
-          type: ActionType.SAVE_GLOBAL_EDIT_CHUNKS,
-          editList: convertGlobalEditsToLineItems(savedEditData.edits, false),
-          editFile: savedEditData,
-          isLocal: false,
-        });
+export function flushGlobalEditChunksToMasterFile(
+  tourRid: string,
+  localEdits: AllGlobalElEdits<ElEditType>,
+  expectedRevision?: number
+) {
+  return async (dispatch: Dispatch<TSaveGlobalEditChunks | TAutosaving | TTour>, getState: () => TState) => {
+    try {
+      const currentState = getState().default;
+      const savedEditData = currentState.globalEditFile;
+      if (!savedEditData) {
+        throw new Error(`Global edits for tour ${tourRid} are not loaded; cached edits remain queued`);
       }
-    }
+      const nextEditData = {
+        ...savedEditData,
+        lastUpdatedAtUtc: getCurrentUtcUnixTime(),
+        edits: mergeGlobalEdits(savedEditData.edits, localEdits),
+      };
+      const tourResp = await api<ReqRecordEdit, ApiResp<RespDemoEntity>>('/recordtrgbedit', {
+        auth: true,
+        body: {
+          rid: tourRid,
+          editData: JSON.stringify(nextEditData),
+          expectedRevision: expectedRevision ?? getExpectedRevision(currentState.currentTour?.updatedAt),
+        },
+      });
 
-    dispatch({
-      type: ActionType.AUTOSAVING,
-      isAutosaving: false
-    });
+      dispatch({
+        type: ActionType.SAVE_GLOBAL_EDIT_CHUNKS,
+        editList: convertGlobalEditsToLineItems(nextEditData.edits, false),
+        editFile: nextEditData,
+        isLocal: false,
+      });
+      dispatch({
+        type: ActionType.TOUR,
+        tour: processRawTourData(
+          tourResp.data,
+          currentState.commonConfig!,
+          currentState.globalConfig!,
+          false
+        ),
+        oldTourRid: tourRid,
+        performedAction: 'edit'
+      });
+      return getExpectedRevision(tourResp.data.updatedAt);
+    } finally {
+      dispatch({
+        type: ActionType.AUTOSAVING,
+        isAutosaving: false
+      });
+    }
   };
 }
 
@@ -1531,18 +1581,32 @@ export function recordLoaderData(tour: P_RespTour, loaderData: ITourLoaderData) 
   };
 }
 
-export function flushTourDataToMasterFile(tour: P_RespTour, localEdits: Partial<TourDataWoScheme>) {
+export function flushTourDataToMasterFile(
+  tour: P_RespTour,
+  localEdits: Partial<TourDataWoScheme>,
+  expectedRevision?: number
+) {
   return async (dispatch: Dispatch<TSaveTourEntities | TAutosaving | TTour>, getState: () => TState) => {
-    const state = getState();
-    const savedData = state.default.tourData;
-    if (savedData) {
-      savedData.lastUpdatedAtUtc = getCurrentUtcUnixTime();
-      const mergedMasterData = mergeTourData(savedData, localEdits, true);
-      const mergedData = {
-        ...savedData,
-        ...mergedMasterData
+    try {
+      const state = getState();
+      const savedData = state.default.tourData;
+      if (!savedData) {
+        throw new Error(`Tour data for ${tour.rid} is not loaded; cached edits remain queued`);
+      }
+      const mergedData: TourData = {
+        ...mergeTourData(savedData, localEdits, true),
+        v: savedData.v,
+        lastUpdatedAtUtc: getCurrentUtcUnixTime(),
       };
-
+      const data = await api<ReqRecordEdit, ApiResp<RespDemoEntity>>('/recordtredit', {
+        auth: true,
+        body: {
+          rid: tour.rid,
+          editData: JSON.stringify(mergedData),
+          expectedRevision: expectedRevision
+            ?? getExpectedRevision(state.default.currentTour?.updatedAt || tour.updatedAt),
+        },
+      });
       const annotationAndOpts = getThemeAndAnnotationFromDataFile(mergedData, state.default.globalConfig!, false);
       dispatch({
         type: ActionType.SAVE_TOUR_ENTITIES,
@@ -1554,26 +1618,19 @@ export function flushTourDataToMasterFile(tour: P_RespTour, localEdits: Partial<
         journey: annotationAndOpts.journey,
         isLocal: false,
       });
-      const data = await api<ReqRecordEdit, ApiResp<RespDemoEntity>>('/recordtredit', {
-        auth: true,
-        body: {
-          rid: tour.rid,
-          editData: JSON.stringify(mergedData),
-        },
-      });
-
       dispatch({
         type: ActionType.TOUR,
         tour: processRawTourData(data.data, state.default.commonConfig!, state.default.globalConfig!, false),
         oldTourRid: tour.rid,
         performedAction: 'edit'
       });
+      return getExpectedRevision(data.data.updatedAt);
+    } finally {
+      dispatch({
+        type: ActionType.AUTOSAVING,
+        isAutosaving: false
+      });
     }
-
-    dispatch({
-      type: ActionType.AUTOSAVING,
-      isAutosaving: false
-    });
   };
 }
 
@@ -2690,18 +2747,7 @@ const updateSingleAnnotation = async (
   anonymousDemoId: string,
   currentAnnId?: number
 ): Promise<update_demo_content | null> => {
-  if (Number.isNaN(currentAnnId)) {
-    throw new Error('Current Annotation Id not found');
-  }
-
-  const targetIndex = demoState.findIndex(item => item.id === currentAnnId);
-  if (targetIndex === -1) {
-    throw new Error(`Annotation with id ${currentAnnId} not found`);
-  }
-
-  const startIndex = Math.max(0, targetIndex - 2);
-
-  const batchDemoState = demoState.slice(startIndex, batchSize);
+  const batchDemoState = getSingleAnnotationContext(demoState, currentAnnId, batchSize);
   const payload: UpdateDemoContentV1 = {
     v: 1,
     type: LLMOpsType.UpdateDemoContent,

@@ -578,7 +578,7 @@ export default function projectReducer(state = initialState, action: Action) {
       if (tAction.isLocal) {
         newState.localGlobalEdits = [...tAction.editList];
       } else {
-        newState.localGlobalEdits = [...tAction.editList];
+        newState.localGlobalEdits = [];
         newState.remoteGlobalEdits = [...tAction.editList];
         newState.globalEditFile = tAction.editFile!;
       }

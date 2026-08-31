@@ -6,12 +6,15 @@ import com.sharefable.api.common.TourWithConfig;
 import com.sharefable.api.entity.DemoEntity;
 import com.sharefable.api.transport.TourDeleted;
 import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.jpa.repository.Lock;
+import org.springframework.data.repository.query.Param;
 import org.springframework.data.repository.CrudRepository;
 import org.springframework.stereotype.Repository;
 
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
+import jakarta.persistence.LockModeType;
 
 @Repository
 public interface DemoEntityRepo extends CrudRepository<DemoEntity, Long> {
@@ -22,6 +25,10 @@ public interface DemoEntityRepo extends CrudRepository<DemoEntity, Long> {
   List<DemoEntity> findAllByBelongsToOrgAndDeletedAndLastPublishedDateNotNull(Long orgId, TourDeleted deleted);
 
   Optional<DemoEntity> findByRid(String rid);
+
+  @Lock(LockModeType.PESSIMISTIC_WRITE)
+  @Query("SELECT t FROM DemoEntity t WHERE t.rid = :rid")
+  Optional<DemoEntity> findByRidForUpdate(@Param("rid") String rid);
 
   Optional<DemoEntity> findByRidAndEntityType(String rid, TopLevelEntityType type);
 

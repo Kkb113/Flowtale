@@ -14,6 +14,7 @@ import { applyEditsToSerDom } from './utils/edits';
 import { getCustomTopLeftAndScale, getScaleOfElement, MAX_ZOOM_SCALE, scaleRect } from '../../utils';
 import { OnNavigationEvent } from '../../container/player';
 import { Rect } from '../base/hightligher-base';
+import { shouldApplyLegacyVoiceoverZoom } from '../../container/player/playback-compatibility';
 
 export interface IOwnProps {
   resizeSignal: number;
@@ -235,7 +236,7 @@ export default class ScreenPreview extends React.PureComponent<IOwnProps, IOwnSt
     if (!e.detail) return;
     const { box, screenId, annotationType } = e.detail;
     if (screenId === this.props.screen.id) {
-      if (annotationType === 'voiceover') {
+      if (shouldApplyLegacyVoiceoverZoom(annotationType)) {
         const quadrant = this.determineQuadrant(box);
         this.zoomToQuadrant(quadrant, box, e.detail);
       } else {

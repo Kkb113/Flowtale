@@ -7,6 +7,7 @@ import {
   LoadingStatus,
   ScreenData,
   ScreenDiagnostics,
+  TourData,
   TourDataWoScheme,
   TourScreenEntity,
   IGlobalConfig,
@@ -17,7 +18,8 @@ import { connect } from 'react-redux';
 import { Tooltip, Button, Alert } from 'antd';
 import { ReqTourPropUpdate, RespOrg, RespSubscription, RespUser, ScreenType } from '@fable/common/dist/api-contract';
 import { ArrowLeftOutlined } from '@ant-design/icons';
-import { createLiteralProperty, getDefaultLiteralTourOpts, getDefaultTourOpts } from '@fable/common/dist/utils';
+import { createLiteralProperty, getDefaultLiteralTourOpts, getDefaultTourOpts, getRandomId } from '@fable/common/dist/utils';
+import { DemoCommandHistory, DemoEditHistoryResult, DemoEditPlan } from '@fable/common/dist/demo-edit';
 import { sentryCaptureException } from '@fable/common/dist/sentry';
 import {
   AnnAdd,
@@ -29,6 +31,7 @@ import {
   flushGlobalEditChunksToMasterFile,
   flushTourDataToMasterFile,
   getCustomDomains,
+  getExpectedRevision,
   getSubscriptionOrCheckoutNew,
   loadScreenAndData,
   loadTourAndData,
@@ -85,7 +88,7 @@ import {
   combineAllEdits,
   processGlobalEditsWithElpath
 } from '../../utils';
-import ChunkSyncManager, { SyncTarget, Tx } from './chunk-sync-manager';
+import ChunkSyncManager, { SyncStatus, SyncTarget, Tx } from './chunk-sync-manager';
 import {
   getAnnotationByRefId,
   addNewAnn,
@@ -105,9 +108,21 @@ interface IDispatchProps {
   saveEditChunks: (screen: P_RespScreen, editChunks: AllEdits<ElEditType>, serDom: SerNode) => void;
   saveGlobalEditChunks: (editChunks: AllGlobalElEdits<ElEditType>) => void;
   saveTourData: (tour: P_RespTour, data: TourDataWoScheme, isJourneyUpdate?: boolean) => void;
-  flushEditChunksToMasterFile: (screenIdRidStr: string, edits: AllEdits<ElEditType>) => void;
-  flushGlobalEditChunksToMasterFile: (tourRid: string, edits: AllGlobalElEdits<ElEditType>) => void;
-  flushTourDataToMasterFile: (tour: P_RespTour, edits: TourDataWoScheme) => void;
+  flushEditChunksToMasterFile: (
+    screenIdRidStr: string,
+    edits: AllEdits<ElEditType>,
+    expectedRevision?: number
+  ) => Promise<number | undefined>;
+  flushGlobalEditChunksToMasterFile: (
+    tourRid: string,
+    edits: AllGlobalElEdits<ElEditType>,
+    expectedRevision?: number
+  ) => Promise<number | undefined>;
+  flushTourDataToMasterFile: (
+    tour: P_RespTour,
+    edits: Partial<TourDataWoScheme>,
+    expectedRevision?: number
+  ) => Promise<number | undefined>;
   loadTourWithDataAndCorrespondingScreens: (rid: string) => void,
   clearCurrentScreenSelection: () => void,
   clearCurrentTourSelection: () => void,
@@ -133,15 +148,21 @@ const mapDispatchToProps = (dispatch: any): IDispatchProps => ({
     (screen: P_RespScreen, editChunks: AllEdits<ElEditType>, serDom: SerNode) => dispatch(saveEditChunks(screen, editChunks, serDom)),
   saveGlobalEditChunks: (editChunks) => dispatch(saveGlobalEditChunks(editChunks)),
   flushEditChunksToMasterFile:
-    (screenIdRidStr: string, edits: AllEdits<ElEditType>) => dispatch(flushEditChunksToMasterFile(screenIdRidStr, edits)),
+    (screenIdRidStr: string, edits: AllEdits<ElEditType>, expectedRevision?: number) => (
+      dispatch(flushEditChunksToMasterFile(screenIdRidStr, edits, expectedRevision))
+    ),
   flushGlobalEditChunksToMasterFile:
-    (tourRid, edits: AllGlobalElEdits<ElEditType>) => dispatch(flushGlobalEditChunksToMasterFile(tourRid, edits)),
+    (tourRid, edits: AllGlobalElEdits<ElEditType>, expectedRevision?: number) => (
+      dispatch(flushGlobalEditChunksToMasterFile(tourRid, edits, expectedRevision))
+    ),
   saveTourData: (
     tour: P_RespTour,
     data: TourDataWoScheme,
   ) => dispatch(saveTourData(tour, data)),
   flushTourDataToMasterFile:
-    (tour: P_RespTour, edits: TourDataWoScheme) => dispatch(flushTourDataToMasterFile(tour, edits)),
+    (tour: P_RespTour, edits: Partial<TourDataWoScheme>, expectedRevision?: number) => (
+      dispatch(flushTourDataToMasterFile(tour, edits, expectedRevision))
+    ),
   clearCurrentScreenSelection: () => dispatch(clearCurrentScreenSelection()),
   clearCurrentTourSelection: () => dispatch(clearCurrentTourSelection()),
   renameScreen: (screen: P_RespScreen, newVal: string) => dispatch(renameScreen(screen, newVal)),
@@ -242,6 +263,7 @@ interface IAppStateProps {
   vanityDomains: P_RespVanityDomain[] | null;
   globalOpts: IGlobalConfig | null;
   allGlobalEdits: EditItem[];
+  tourData: TourData | null;
 }
 
 function __dbg(anns: AnnotationPerScreen[]): void {
@@ -357,6 +379,7 @@ const mapStateToProps = (state: TState): IAppStateProps => {
     vanityDomains: state.default.vanityDomains,
     globalOpts: state.default.globalConfig,
     allGlobalEdits,
+    tourData: state.default.tourData,
   };
 };
 
@@ -392,6 +415,8 @@ class TourEditor extends React.PureComponent<IProps, IOwnStateProps> {
 
   private chunkSyncManager: ChunkSyncManager | null = null;
 
+  private readonly commandHistory = new DemoCommandHistory();
+
   constructor(props: IProps) {
     super(props);
     this.state = {
@@ -415,7 +440,10 @@ class TourEditor extends React.PureComponent<IProps, IOwnStateProps> {
     setEventCommonState(CmnEvtProp.TOUR_URL, createIframeSrc(`/demo/${this.props.match.params.tourId}`));
     this.chunkSyncManager = new ChunkSyncManager(SyncTarget.LocalStorage, TourEditor.LOCAL_STORAGE_KEY_PREFIX, {
       onSyncNeeded: this.flushEdits,
+      onStatusChange: this.onSyncStatusChange,
+      onAcknowledged: this.onSyncAcknowledged,
     });
+    document.addEventListener('keydown', this.onEditorKeyDown);
     if (this.props.match.params.screenId) {
       this.props.loadScreenAndData(this.props.match.params.screenId);
     }
@@ -495,18 +523,14 @@ class TourEditor extends React.PureComponent<IProps, IOwnStateProps> {
     this.props.navigate(`/demo/${this.props.tour!.rid}`);
   };
 
-  onLocalEditsLeft = (key: string, edits: AllEdits<ElEditType>): void => {
-    if (!this.props.screen || !this.props.screenData) {
-      // TODO this check should not be there as screen should alaways be present, but turning it off causes error
-      // sometime.Investigate
-      return;
-    }
-    if (key.startsWith(TourEditor.LOCAL_STORAGE_KEY_PREFIX_EDIT_CHUNK) || key.endsWith(this.props.screen.rid)) {
-      this.props.saveEditChunks(this.props.screen, edits, this.props.screenData.docTree);
-    }
-
-    if (key.startsWith(TourEditor.LOCAL_STORAGE_KEY_PREFIX_TOUR_DATA)) {
-      // TODO[now] sync with server
+  onLocalEditsLeft = (key: string, edits: AllEdits<ElEditType> | TourDataWoScheme | AllGlobalElEdits<ElEditType>): void => {
+    if (key.startsWith(TourEditor.LOCAL_STORAGE_KEY_PREFIX_EDIT_CHUNK)
+      && this.props.screen && this.props.screenData && key.endsWith(this.props.screen.rid)) {
+      this.props.saveEditChunks(this.props.screen, edits as AllEdits<ElEditType>, this.props.screenData.docTree);
+    } else if (key.startsWith(TourEditor.LOCAL_STORAGE_KEY_PREFIX_TOUR_DATA) && this.props.tour) {
+      this.props.saveTourData(this.props.tour, edits as TourDataWoScheme);
+    } else if (key.startsWith(TourEditor.LOCAL_STORAGE_KEY_PREFIX_GLOBAL_EDIT_CHUNK)) {
+      this.props.saveGlobalEditChunks(edits as AllGlobalElEdits<ElEditType>);
     }
   };
 
@@ -584,6 +608,7 @@ class TourEditor extends React.PureComponent<IProps, IOwnStateProps> {
   };
 
   componentWillUnmount(): void {
+    document.removeEventListener('keydown', this.onEditorKeyDown);
     this.chunkSyncManager?.end();
     this.props.clearCurrentScreenSelection();
     this.props.clearCurrentTourSelection();
@@ -979,18 +1004,103 @@ class TourEditor extends React.PureComponent<IProps, IOwnStateProps> {
     }
   };
 
-  private flushEdits = (key: string, value: AllEdits<ElEditType> | TourDataWoScheme): void => {
+  private flushEdits = async (
+    key: string,
+    value: AllEdits<ElEditType> | TourDataWoScheme,
+    expectedRevision?: number
+  ): Promise<{revision?: number}> => {
+    let revision: number | undefined;
     if (key.startsWith(TourEditor.LOCAL_STORAGE_KEY_PREFIX_EDIT_CHUNK)) {
       const screenIdRid = key.substring(TourEditor.LOCAL_STORAGE_KEY_PREFIX_EDIT_CHUNK.length + 1);
       const tValue = value as AllEdits<ElEditType>;
-      this.props.flushEditChunksToMasterFile(screenIdRid, tValue);
+      revision = await this.props.flushEditChunksToMasterFile(screenIdRid, tValue, expectedRevision);
     } else if (key.startsWith(TourEditor.LOCAL_STORAGE_KEY_PREFIX_TOUR_DATA)) {
+      if (!this.props.tour) throw new Error('Tour is not loaded; cached edits remain queued');
       const tValue = value as TourDataWoScheme;
-      this.props.flushTourDataToMasterFile(this.props.tour!, tValue);
+      revision = await this.props.flushTourDataToMasterFile(this.props.tour, tValue, expectedRevision);
     } else if (key.startsWith(TourEditor.LOCAL_STORAGE_KEY_PREFIX_GLOBAL_EDIT_CHUNK)) {
       const tourRid = key.substring(TourEditor.LOCAL_STORAGE_KEY_PREFIX_GLOBAL_EDIT_CHUNK.length + 1);
       const tValue = value as AllGlobalElEdits<ElEditType>;
-      this.props.flushGlobalEditChunksToMasterFile(tourRid, tValue);
+      revision = await this.props.flushGlobalEditChunksToMasterFile(tourRid, tValue, expectedRevision);
+    }
+    return { revision };
+  };
+
+  private onSyncStatusChange = (status: SyncStatus): void => {
+    if (status.type === 'saving' || status.type === 'retrying') {
+      this.props.startAutoSaving();
+    }
+    if (status.type === 'conflict') {
+      this.showHideAlert('This demo changed in another session. Your local changes are safe; reload before retrying them.');
+    }
+  };
+
+  private onSyncAcknowledged = (key: string, acknowledgement: {revision?: number}): void => {
+    if (acknowledgement.revision === undefined || !this.props.tour) return;
+    const affectsTour = key.startsWith(TourEditor.LOCAL_STORAGE_KEY_PREFIX_TOUR_DATA)
+      || key.startsWith(TourEditor.LOCAL_STORAGE_KEY_PREFIX_GLOBAL_EDIT_CHUNK);
+    if (!affectsTour) return;
+    const tourRidSuffix = `/${this.props.tour.rid}`;
+    this.chunkSyncManager?.rebaseExpectedRevisions(
+      pendingKey => pendingKey !== key
+        && pendingKey.endsWith(tourRidSuffix)
+        && (
+          pendingKey.startsWith(TourEditor.LOCAL_STORAGE_KEY_PREFIX_TOUR_DATA)
+          || pendingKey.startsWith(TourEditor.LOCAL_STORAGE_KEY_PREFIX_GLOBAL_EDIT_CHUNK)
+        ),
+      acknowledgement.revision
+    );
+  };
+
+  private getSemanticEditState = (): TourDataWoScheme | null => {
+    if (!this.props.tourData || !this.props.journey) return null;
+    return {
+      ...this.props.tourData,
+      opts: this.props.tourOpts,
+      journey: this.props.journey,
+    };
+  };
+
+  private persistSemanticEdit = (result: DemoEditHistoryResult): void => {
+    if (!result.changed || !this.chunkSyncManager || !this.props.tour) return;
+    this.props.startAutoSaving();
+    const partialTourData: Partial<TourDataWoScheme> = {
+      opts: result.state.opts,
+      journey: result.state.journey,
+      entities: {},
+    };
+    this.chunkSyncManager.add(
+      this.getStorageKeyForType('tour-data'),
+      partialTourData,
+      (storedData: TourDataWoScheme | null, incoming: Partial<TourDataWoScheme>) => (
+        storedData === null ? incoming as TourDataWoScheme : mergeTourData(storedData, incoming)
+      ),
+      undefined,
+      getExpectedRevision(this.props.tour.updatedAt)
+    );
+    this.props.saveTourData(this.props.tour, result.state);
+  };
+
+  private executeDemoEditPlan = (plan: DemoEditPlan): void => {
+    const current = this.getSemanticEditState();
+    if (!current) return;
+    this.persistSemanticEdit(this.commandHistory.execute(current, plan));
+  };
+
+  private onEditorKeyDown = (event: KeyboardEvent): void => {
+    if (!(event.ctrlKey || event.metaKey)) return;
+    const target = event.target as HTMLElement | null;
+    if (target && (target.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName))) return;
+    const current = this.getSemanticEditState();
+    if (!current) return;
+
+    const key = event.key.toLowerCase();
+    if (key === 'z' && !event.shiftKey && this.commandHistory.canUndo()) {
+      event.preventDefault();
+      this.persistSemanticEdit(this.commandHistory.undo(current));
+    } else if ((key === 'y' || (key === 'z' && event.shiftKey)) && this.commandHistory.canRedo()) {
+      event.preventDefault();
+      this.persistSemanticEdit(this.commandHistory.redo(current));
     }
   };
 
@@ -1033,7 +1143,8 @@ class TourEditor extends React.PureComponent<IProps, IOwnStateProps> {
           }
           return mergeTourData(storedEntities, e);
         },
-        tx
+        tx,
+        getExpectedRevision(this.props.tour?.updatedAt)
       );
       if (!tx) this.props.saveTourData(this.props.tour!, mergedData!);
     }
@@ -1055,7 +1166,9 @@ class TourEditor extends React.PureComponent<IProps, IOwnStateProps> {
           return edits;
         }
         return mergeEdits(storedEdits, edits);
-      }
+      },
+      undefined,
+      getExpectedRevision(forScreen.updatedAt)
     );
     this.props.saveEditChunks(forScreen, mergedEditChunks!, this.props.screenData!.docTree);
   };
@@ -1070,7 +1183,9 @@ class TourEditor extends React.PureComponent<IProps, IOwnStateProps> {
           return edits;
         }
         return mergeGlobalEdits(storedEdits, edits);
-      }
+      },
+      undefined,
+      getExpectedRevision(this.props.tour?.updatedAt)
     );
     this.props.saveGlobalEditChunks(mergedEditChunks!);
   };
@@ -1080,6 +1195,25 @@ class TourEditor extends React.PureComponent<IProps, IOwnStateProps> {
     newJourney: JourneyData | null,
     tx?: Tx
   ): void => {
+    if (newJourney && this.props.journey) {
+      const { hideModuleOnLoad: previousValue, ...previousJourney } = this.props.journey;
+      const { hideModuleOnLoad: nextValue, ...nextJourney } = newJourney;
+      if (previousValue !== nextValue && JSON.stringify(previousJourney) === JSON.stringify(nextJourney)) {
+        this.executeDemoEditPlan({
+          id: getRandomId(),
+          version: 1,
+          source: 'manual',
+          description: 'Minimize module on start',
+          operations: [{
+            id: getRandomId(),
+            type: 'journey-option.set',
+            key: 'hideModuleOnLoad',
+            value: nextValue,
+          }],
+        });
+        return;
+      }
+    }
     this.props.startAutoSaving();
 
     const journey = newJourney
@@ -1100,7 +1234,8 @@ class TourEditor extends React.PureComponent<IProps, IOwnStateProps> {
         }
         return mergeTourData(storedEntities, e);
       },
-      tx
+      tx,
+      getExpectedRevision(this.props.tour?.updatedAt)
     );
 
     if (!tx) this.props.saveTourData(this.props.tour!, mergedData!);

@@ -4,7 +4,8 @@ import com.fasterxml.jackson.annotation.JsonValue;
 
 @GenerateTSDef
 public enum SchemaVersion {
-    V1("2023-01-10");
+    V1("2023-01-10"),
+    V2("2026-08-31");
 
     public final String v;
 

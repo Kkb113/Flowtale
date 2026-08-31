@@ -151,7 +151,10 @@ public class EntityService extends ServiceBase {
 
   @Transactional
   public RespDemoEntity updateEditForTour(ReqRecordEdit body, User userEntity, EditTour fileTobeEdited) {
-    DemoEntity demoEntity = getEntityByRIdWithAuthValidation(DemoEntity.class, body.rid(), userEntity);
+    DemoEntity demoEntity = demoEntityRepo.findByRidForUpdate(body.rid())
+      .map(entity -> validateEntityWithAuth(entity, body.rid(), userEntity))
+      .orElseThrow(() -> new ResponseStatusException(HttpStatus.FORBIDDEN, ""));
+    EditRevisionGuard.assertCurrent(demoEntity.getUpdatedAt(), body.expectedRevision());
 
     S3Config.FileConfig fileConfig = switch (fileTobeEdited) {
       case LOADER -> S3Config.getEntityFiles().loaderFile();
@@ -166,6 +169,7 @@ public class EntityService extends ServiceBase {
       S3Config.AssetType.Tour);
 
     demoEntity.setLastInteractedAt(Utils.getCurrentUtcTimestamp());
+    demoEntity.setUpdatedAt(Utils.getCurrentUtcTimestamp());
     DemoEntity updatedDemoEntity = demoEntityRepo.save(demoEntity);
     return RespDemoEntity.from(updatedDemoEntity);
   }

@@ -91,6 +91,11 @@ import VoiceoverControl from '../../component/voiceover-control';
 import Tracker from './tracker';
 import AnnotationMedia from '../../component/annotation/media-player';
 import InfoCon from '../../component/info-con';
+import {
+  hasLegacyVoiceover,
+  resolveLegacyInteractiveMode,
+  shouldShowVoiceoverControl,
+} from './playback-compatibility';
 
 const JourneyMenu = lazy(() => import('../../component/journey-menu'));
 interface IDispatchProps {
@@ -856,12 +861,12 @@ export class Player extends React.PureComponent<IProps, IOwnStateProps> {
       // for backward compatibility
       // when in /embed or /live route we display voiceover if isVideo is undefined and voiceover
       // exist in demo even if mode=video param is not added in demo url
-      let interactiveMode = prevState.interactiveMode;
-      if (this.props.tour!.info.isVideo === undefined && interactiveMode !== INTERACTIVE_MODE.INTERACTIVE_VIDEO
-         && !this.props.staging) {
-        interactiveMode = isVoiceoverAppliedToAtleastOneAnnInDemo ? INTERACTIVE_MODE.INTERACTIVE_VIDEO
-          : INTERACTIVE_MODE.INTERACTIVE_TOUR;
-      }
+      const interactiveMode = resolveLegacyInteractiveMode(
+        this.props.tour!.info.isVideo,
+        prevState.interactiveMode,
+        Boolean(this.props.staging),
+        isVoiceoverAppliedToAtleastOneAnnInDemo,
+      );
 
       // When the first ann has a voiceover that is played as an audio element,
       // browser's might block the autoplay, a dedicated overlay with view demo forces
@@ -928,10 +933,7 @@ export class Player extends React.PureComponent<IProps, IOwnStateProps> {
   getIsVoiceoverAppliedToAtleastOneAnnInTheDemo = (): boolean => {
     if (!this.props.annotationsInOrder) return false;
 
-    const isVoiceoverAppliedToAtleastOneAnnInDemo = this.props.annotationsInOrder.findIndex(
-      ann => ann.voiceover !== null
-    ) !== -1;
-    return isVoiceoverAppliedToAtleastOneAnnInDemo;
+    return hasLegacyVoiceover(this.props.annotationsInOrder);
   };
 
   getScreenAtId(id: string, key: keyof P_RespScreen): P_RespScreen {
@@ -981,8 +983,10 @@ export class Player extends React.PureComponent<IProps, IOwnStateProps> {
   handleCurrentAnn = (e: OnNavigationEvent): void => {
     if (e.type === InternalEvents.OnNavigation && e.detail) {
       this.setState(prevS => ({
-        showVoiceoverControl: e.detail!.annotationType === 'voiceover'
-        && prevS.interactiveMode === INTERACTIVE_MODE.INTERACTIVE_VIDEO,
+        showVoiceoverControl: shouldShowVoiceoverControl(
+          e.detail!.annotationType,
+          prevS.interactiveMode,
+        ),
         currAnnRefId: e.detail!.currentAnnotationRefId
       }));
     }
