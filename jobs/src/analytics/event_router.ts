@@ -37,6 +37,8 @@ export async function routeAnalyticsJob(msg: AnalyticsJobSqsTriggerData) {
       case AnalyticsJobType.REFRESH_DAILY_ENTITY_METRICS:
         await refreshDailyEntityMetrics(jobOps);
         break;
+      default:
+        throw new Error('Unsupported analytics job type');
     }
     log.info(`Job finished with data ${JSON.stringify(jobOps.getJob().jobData || {})}`);
   } catch (err) {
@@ -44,10 +46,11 @@ export async function routeAnalyticsJob(msg: AnalyticsJobSqsTriggerData) {
     log.err(`Error while executing a Analytics job. ${e.message}.`);
     Sentry.captureException(e);
     if (jobOps) {
-      jobOps.markJobAs(ProcessingStatus.Failed, e.message, {
+      await jobOps.markJobAs(ProcessingStatus.Failed, e.message, {
         stack: e.stack,
         query: (e as any).query,
       });
     }
+    throw e;
   }
 }

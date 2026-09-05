@@ -42,6 +42,7 @@ export const createLinkedAccountForNewUser = async (utProps: TMsgAttrs) => {
     });
   } catch(error){
     captureException(error as Error);
+    throw error;
   }
 };
 
@@ -61,6 +62,7 @@ export async function sendEventToCobalt(props: TMsgAttrs) {
   } catch (err) {
     log.err('Something went wrong while sending refreshing contact property or tour activity timeline event to vendor', err);
     captureException(err as Error);
+    throw err;
   }
 }
 
@@ -116,4 +118,4 @@ async function cobaltEventApi (eventPayload: Event, accountId: string): Promise<
     log.err(`Something went wrong while sending the event [ ${eventPayload.event} ] to vendor`, resp.statusText);
     throw new Error(`Something went wrong while sending the event [ ${eventPayload.event} ] to vendor`);
   } 
-} 
+}

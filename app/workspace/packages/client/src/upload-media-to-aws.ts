@@ -1,5 +1,5 @@
 import api from '@fable/common/dist/api';
-import raiseDeferredError from '@fable/common/dist/deferred-error';
+import { uploadAsset } from '@fable/common/dist/upload';
 import {
   RespMediaProcessingInfo,
   ReqMediaProcessing,
@@ -10,13 +10,15 @@ import {
   EntityType
 } from '@fable/common/dist/api-contract';
 import { captureException } from '@sentry/react';
+import { waitForMedia } from './media-processing';
 
-export const getS3UploadUrl = async (type: string): Promise<{
+export const getS3UploadUrl = async (type: string, signal?: AbortSignal): Promise<{
   baseUrl: string;
   cdnUrl: string
 } | null> => {
-  const res = await api<null, ApiResp<RespUploadUrl>>(`/getuploadlink?te=${btoa(type)}`, {
+  const res = await api<null, ApiResp<RespUploadUrl>>(`/getuploadlink?te=${encodeURIComponent(btoa(type))}`, {
     auth: true,
+    signal,
   });
 
   if (res.status === ResponseStatus.Failure) {
@@ -35,60 +37,16 @@ export async function uploadMediaToAws(
   const awsSignedUrl = await getS3UploadUrl(type);
   if (!awsSignedUrl) return awsSignedUrl;
 
-  await fetch(awsSignedUrl.baseUrl, {
-    method: 'PUT',
-    body: mediaBuffer,
-    headers: { 'Content-Type': type },
-  });
+  await uploadAsset(awsSignedUrl.baseUrl, mediaBuffer, type);
   return awsSignedUrl;
 }
 
-// TODO[now] have to return both cdn url and processed url
-export async function uploadImageDataToAws(base64ImageData: string, type: 'image/png') {
-  const awsSignedUrl = await getS3UploadUrl(type);
-  if (!awsSignedUrl) return awsSignedUrl;
-
-  const imageData = base64ImageData.replace(/^data:image\/\w+;base64,/, '');
-  const byteCharacters = atob(imageData);
-  const byteNumbers = new Array(byteCharacters.length);
-  for (let i = 0; i < byteCharacters.length; i++) {
-    byteNumbers[i] = byteCharacters.charCodeAt(i);
-  }
-  const byteArray = new Uint8Array(byteNumbers);
-
-  const res = await fetch(awsSignedUrl.baseUrl, {
-    method: 'PUT',
-    body: byteArray,
-    headers: { 'Content-Type': type },
-  });
-
-  if (res.status === 200) {
-    return awsSignedUrl;
-  }
-  raiseDeferredError(new Error(`Failed to upload image to AWS. Status ${res.status}`));
-  return null;
-}
-
-export const uploadImageAsBinary = async (selectedImage: any, presignedUrls: {
+export const uploadImageAsBinary = async (selectedImage: Blob, presignedUrls: {
   baseUrl: string,
   cdnUrl: string
-}): Promise<string> => {
-  const reader = new FileReader();
-  reader.readAsArrayBuffer(selectedImage);
-  return new Promise((resolve) => {
-    reader.addEventListener('load', async () => {
-      const binaryData = reader.result;
-      const res = await fetch(presignedUrls.baseUrl, {
-        method: 'PUT',
-        body: binaryData,
-        headers: { 'Content-Type': selectedImage.type },
-      });
-
-      if (res.status === 200) {
-        resolve(presignedUrls.cdnUrl);
-      }
-    });
-  });
+}, signal?: AbortSignal): Promise<string> => {
+  await uploadAsset(presignedUrls.baseUrl, selectedImage, selectedImage.type, { signal });
+  return presignedUrls.cdnUrl;
 };
 
 export const uploadMarkedImageToAws = async (
@@ -98,37 +56,32 @@ export const uploadMarkedImageToAws = async (
   file: File
 ): Promise<string> => {
   // eslint-disable-next-line max-len
-  const data = await api<null, ApiResp<RespUploadUrl>>(`/getpvtuploadlink?te=${btoa(contentType)}&pre=${anonDemoId}&fe=${btoa(imageName)}&t=${PvtAssetType.MarkedImgs}`, {
+  const data = await api<null, ApiResp<RespUploadUrl>>(`/getpvtuploadlink?te=${encodeURIComponent(btoa(contentType))}&pre=${encodeURIComponent(anonDemoId)}&fe=${encodeURIComponent(btoa(imageName))}&t=${PvtAssetType.MarkedImgs}`, {
     auth: true
   });
-  if (data.status === ResponseStatus.Failure) {
-    captureException('Error in getting S3 upload url');
-    return '';
+  if (data.status === ResponseStatus.Failure || !data.data?.objectKey) {
+    throw new Error('Could not prepare the AI image upload. Your capture is retained; retry the request.');
   }
-
-  const s3PresignedUploadUrl = data.data.url;
-  const imageUrl = await uploadImageAsBinary(file, {
-    baseUrl: s3PresignedUploadUrl,
-    cdnUrl: s3PresignedUploadUrl.split('?')[0]
-  });
-  return imageUrl;
+  await uploadAsset(data.data.url, file, contentType);
+  return data.data.objectKey;
 };
 
-export async function uploadImgFileObjectToAws(image: File) {
+export async function uploadImgFileObjectToAws(image: File, signal?: AbortSignal) {
   if (!image) {
     return null;
   }
-  const awsSignedUrl = await getS3UploadUrl(image.type);
+  const awsSignedUrl = await getS3UploadUrl(image.type, signal);
   if (!awsSignedUrl) return awsSignedUrl;
 
-  await uploadImageAsBinary(image, awsSignedUrl);
+  await uploadImageAsBinary(image, awsSignedUrl, signal);
   return awsSignedUrl;
 }
 
-export async function transcodeVideo(uri: string, cdnUrl: string, tourRid: string):
+export async function transcodeVideo(uri: string, cdnUrl: string, tourRid: string, signal?: AbortSignal):
   Promise<[err: string, ...streams: RespMediaProcessingInfo[]]> {
   const data = await api<ReqMediaProcessing, ApiResp<RespMediaProcessingInfo[]>>('/vdt', {
     auth: true,
+    signal,
     body: {
       cdnPath: cdnUrl,
       path: uri,
@@ -141,13 +94,14 @@ export async function transcodeVideo(uri: string, cdnUrl: string, tourRid: strin
   if (data.status === ResponseStatus.Failure) {
     return ["Couldn't transcode video"];
   }
-  return ['', ...data.data];
+  return ['', ...await waitForMedia(data.data, signal)];
 }
 
-export async function transcodeAudio(uri: string, cdnUrl: string, tourRid: string):
+export async function transcodeAudio(uri: string, cdnUrl: string, tourRid: string, signal?: AbortSignal):
   Promise<[err: string, ...streams: RespMediaProcessingInfo[]]> {
   const data = await api<ReqMediaProcessing, ApiResp<RespMediaProcessingInfo[]>>('/audt', {
     auth: true,
+    signal,
     body: {
       path: uri,
       cdnPath: cdnUrl,
@@ -160,5 +114,5 @@ export async function transcodeAudio(uri: string, cdnUrl: string, tourRid: strin
   if (data.status === ResponseStatus.Failure) {
     return ["Couldn't transcode audio"];
   }
-  return ['', ...data.data];
+  return ['', ...await waitForMedia(data.data, signal)];
 }

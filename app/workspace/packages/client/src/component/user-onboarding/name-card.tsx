@@ -3,9 +3,10 @@ import { traceEvent } from '@fable/common/dist/amplitude';
 import {
   RespUser
 } from '@fable/common/dist/api-contract';
-import raiseDeferredError from '@fable/common/dist/deferred-error';
 import { CmnEvtProp } from '@fable/common/dist/types';
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
+import { Alert } from 'antd';
+import { captureMessage } from '@sentry/react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { AMPLITUDE_EVENTS } from '../../amplitude/events';
 import { OnboardingSteps, USER_ONBOARDING_ROUTE } from '../../container/user-onboarding';
@@ -22,6 +23,13 @@ export default function NameCard(props: Props): JSX.Element {
   const [firstName, setFirstName] = useState('');
   const [lastName, setLastName] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const pending = useRef(false);
+  const mounted = useRef(false);
+  useEffect(() => {
+    mounted.current = true;
+    return () => { mounted.current = false; };
+  }, []);
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
 
@@ -32,9 +40,20 @@ export default function NameCard(props: Props): JSX.Element {
 
   const handleSubmit = async (e: React.FormEvent<HTMLFormElement>): Promise<void> => {
     e.preventDefault();
+    if (pending.current || !firstName.trim()) return;
+    pending.current = true;
+    setError(null);
     setIsLoading(true);
-    await props.updateUser(firstName, lastName);
-    setIsLoading(false);
+    try {
+      await props.updateUser(firstName.trim(), lastName.trim());
+    } catch (failure) {
+      if (mounted.current) setError(failure instanceof Error ? failure.message : 'Your name could not be saved.');
+      return;
+    } finally {
+      pending.current = false;
+      if (mounted.current) setIsLoading(false);
+    }
+    if (!mounted.current) return;
 
     try {
       setEventCommonState(CmnEvtProp.FIRST_NAME, firstName);
@@ -45,10 +64,10 @@ export default function NameCard(props: Props): JSX.Element {
         [CmnEvtProp.FIRST_NAME, CmnEvtProp.LAST_NAME, CmnEvtProp.EMAIL]
       );
 
-      // @ts-ignore
-      window.gr('track', 'conversion', { email: props.principal.email });
+      const referralTracker = (window as Window & { gr?: (...args: unknown[]) => void }).gr;
+      if (typeof referralTracker === 'function') referralTracker('track', 'conversion', { email: props.principal.email });
     } catch (err) {
-      raiseDeferredError(new Error('User not defined for Reditus logging'));
+      captureMessage('Optional signup analytics were not recorded', 'warning');
     }
 
     navigate(`/${USER_ONBOARDING_ROUTE}${getQueryParmsStrWithQuestionMark()}#${OnboardingSteps.ORGANIZATION_DETAILS}`, { replace: true });
@@ -66,6 +85,7 @@ export default function NameCard(props: Props): JSX.Element {
         gap: '5rem',
       }}
     >
+      {error && <Alert type="error" showIcon message="Your name could not be saved" description={error} />}
       <div
         className="typ-h1"
         style={{
@@ -106,7 +126,7 @@ export default function NameCard(props: Props): JSX.Element {
         />
         <Button
           icon={<ArrowRightOutlined />}
-          disabled={isLoading}
+          disabled={isLoading || !firstName.trim()}
         >
           {isLoading ? 'Loading...' : 'Start for free'}
         </Button>

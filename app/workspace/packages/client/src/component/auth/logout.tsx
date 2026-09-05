@@ -9,6 +9,7 @@ import InfoCon, { InfoBtn } from '../info-con';
 import FullPageTopLoader from '../loader/full-page-top-loader';
 import { FABLE_LOCAL_STORAGE_ORG_ID_KEY } from '../../constants';
 import { OurLink } from '../../common-styled';
+import { shutdownSupportWidget } from '../../support-widget';
 
 interface Props {
   title: string,
@@ -27,6 +28,8 @@ export default function Logout(props: Props): JSX.Element {
 
   useEffect(() => {
     document.title = props.title;
+    shutdownSupportWidget();
+    let redirectTimer: ReturnType<typeof setTimeout> | undefined;
 
     const logoutTypeRaw = searchParams.get('t');
     let logoutType = 0;
@@ -110,12 +113,13 @@ export default function Logout(props: Props): JSX.Element {
         );
         setBtns([]);
         setShowLoader(true);
-        setTimeout(() => {
+        redirectTimer = setTimeout(() => {
           logout({ logoutParams: { returnTo: `${APP_CLIENT_ENDPOINT}/login` } });
         }, 1500);
 
         break;
     }
+    return () => { if (redirectTimer) clearTimeout(redirectTimer); };
   }, [searchParams]);
 
   return (

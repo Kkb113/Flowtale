@@ -1,6 +1,8 @@
 package com.sharefable.api.controller.v1;
 
 import com.sharefable.api.common.ApiResp;
+import com.sharefable.api.auth.AuthUser;
+import com.sharefable.api.entity.User;
 import com.sharefable.Routes;
 import com.sharefable.api.service.MediaProcessingService;
 import com.sharefable.api.transport.req.ReqMediaProcessing;
@@ -27,16 +29,22 @@ public class MediaProcessingController {
 
   @RequestMapping(value = Routes.TRANSCODE_VIDEO, method = RequestMethod.POST, produces = MediaType.APPLICATION_JSON_VALUE)
   //@PreAuthorize("hasAuthority(@Perm.WRITE_TOUR)")
-  public ApiResp<RespMediaProcessingInfo[]> transcodeVideo(@RequestBody ReqMediaProcessing body) {
-    RespMediaProcessingInfo[] infos = mpiService.transcodeVideoForStreaming(body);
+  public ApiResp<RespMediaProcessingInfo[]> transcodeVideo(@RequestBody ReqMediaProcessing body, @AuthUser User user) {
+    RespMediaProcessingInfo[] infos = mpiService.transcodeVideoForStreaming(body, user);
     return ApiResp.<RespMediaProcessingInfo[]>builder().status(ApiResp.ResponseStatus.Success).data(infos).build();
   }
 
   @RequestMapping(value = Routes.TRANSCODE_AUDIO, method = RequestMethod.POST, produces = MediaType.APPLICATION_JSON_VALUE)
   //@PreAuthorize("hasAuthority(@Perm.WRITE_TOUR)")
-  public ApiResp<RespMediaProcessingInfo[]> transcodeAudio(@RequestBody ReqMediaProcessing body) {
-    RespMediaProcessingInfo[] infos = mpiService.transcodeAudioForStreaming(body);
+  public ApiResp<RespMediaProcessingInfo[]> transcodeAudio(@RequestBody ReqMediaProcessing body, @AuthUser User user) {
+    RespMediaProcessingInfo[] infos = mpiService.transcodeAudioForStreaming(body, user);
     return ApiResp.<RespMediaProcessingInfo[]>builder().status(ApiResp.ResponseStatus.Success).data(infos).build();
+  }
+
+  @GetMapping(value = Routes.MEDIA_JOB, produces = MediaType.APPLICATION_JSON_VALUE)
+  public ApiResp<RespMediaProcessingInfo> mediaJob(@PathVariable("id") Long id, @AuthUser User user) {
+    return ApiResp.<RespMediaProcessingInfo>builder().status(ApiResp.ResponseStatus.Success)
+      .data(mpiService.getJob(id, user)).build();
   }
 
   @RequestMapping(value = Routes.RESIZE_IMG, method = RequestMethod.POST, produces = MediaType.APPLICATION_JSON_VALUE)

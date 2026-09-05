@@ -31,7 +31,6 @@
     "scripting",
     "storage",
     "webNavigation",
-    "cookies",
     "unlimitedStorage"
   ],
   "content_security_policy": {

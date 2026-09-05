@@ -1,4 +1,5 @@
 import React, { useRef, useState } from 'react';
+import { sanitizeRichText } from '../../../rich-text-sanitizer';
 import { useDemoHubQlfcnCtx } from '../ctx';
 import * as GTags from '../../../common-styled';
 import { EntryProps } from '../type';
@@ -71,7 +72,7 @@ function LeadFormEntry(props: Props): JSX.Element {
         scaleDownLeadForm
         ref={conRef}
       >
-        <div dangerouslySetInnerHTML={{ __html: config.leadform.bodyContent }} />
+        <div dangerouslySetInnerHTML={{ __html: sanitizeRichText(config.leadform.bodyContent) }} />
       </GTags.LeadFormEntryCon>
     </BaseEntry>
   );

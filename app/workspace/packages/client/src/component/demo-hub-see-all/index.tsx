@@ -4,6 +4,8 @@ import { useNavigate } from 'react-router-dom';
 import raiseDeferredError from '@fable/common/dist/deferred-error';
 import { createLiteralProperty } from '@fable/common/dist/utils';
 import { ThunderboltFilled } from '@ant-design/icons';
+import { isLocalDevelopment } from '../../local-development';
+import { sanitizeRichText } from '../../rich-text-sanitizer';
 import { IDemoHubConfig } from '../../types';
 import * as Tags from './styled';
 import Header from './header';
@@ -42,6 +44,7 @@ const scrollToSection = (): void => {
 };
 
 export const addFontToHeader = (doc: Document, fontFamily: string):void => {
+  if (isLocalDevelopment) return;
   const linkHref = `https://fonts.googleapis.com/css?family=${fontFamily.replace(/\s+/g, '+')}`;
   const fableFontEl = doc.getElementById(FABLE_FONT_ID);
   if (!fableFontEl) {
@@ -310,7 +313,7 @@ function DemoHubSeeAll(props: Props): JSX.Element {
           borderRadius={props.config.see_all_page.demoModalStyles.body.borderRadius}
           ref={conRef}
         >
-          <div dangerouslySetInnerHTML={{ __html: props.config.leadform.bodyContent }} />
+          <div dangerouslySetInnerHTML={{ __html: sanitizeRichText(props.config.leadform.bodyContent) }} />
         </GTags.LeadFormEntryCon>
       </Tags.DemoModal>
       )}

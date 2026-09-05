@@ -40,7 +40,7 @@ export function logEventToCblt<T extends CBEventBase>(event: CBEventPayload<T>, 
       method: 'POST',
       body: event,
       noRespExpected: true,
-    });
+    }).catch(err => sentryCaptureException(err as Error));
   } catch (err) {
     sentryCaptureException(err as Error);
   }
@@ -53,7 +53,7 @@ export function logEventToCbltToSetAppProperties<T extends CBEventBase>(event: C
       method: 'POST',
       body: event,
       noRespExpected: true,
-    });
+    }).catch(err => sentryCaptureException(err as Error));
   } catch (err) {
     sentryCaptureException(err as Error);
   }

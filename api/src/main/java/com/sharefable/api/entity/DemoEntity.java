@@ -78,7 +78,11 @@ public class DemoEntity extends EntityBaseWithOwnership {
 
   private Timestamp lastInteractedAt;
 
-  @ManyToMany(fetch = FetchType.LAZY, cascade = CascadeType.ALL)
+  // Screen snapshots are refreshed under their own row locks. Cascading an ordinary demo
+  // refresh can reload older screen state from MySQL's repeatable-read snapshot.
+  @ManyToMany(fetch = FetchType.LAZY, cascade = {
+    CascadeType.PERSIST, CascadeType.MERGE, CascadeType.REMOVE, CascadeType.DETACH
+  })
   @JoinTable(name = "screens_tours_join", joinColumns = @JoinColumn(name = "tour_id"), inverseJoinColumns = @JoinColumn(name = "screen_id"))
   private Set<Screen> screens;
 }

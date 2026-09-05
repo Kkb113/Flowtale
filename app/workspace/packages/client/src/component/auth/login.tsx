@@ -3,6 +3,8 @@ import { useAuth0 } from '@auth0/auth0-react';
 import { useSearchParams } from 'react-router-dom';
 import InfoCon, { InfoBtn } from '../info-con';
 import FullPageTopLoader from '../loader/full-page-top-loader';
+import { isLocalDevelopment } from '../../local-development';
+import { LocalLogin } from './local-auth';
 
 interface Props {
   title: string,
@@ -16,7 +18,7 @@ export const enum LoginErrorType {
   UserUsedPersonalEmail = '1',
 }
 
-export default function LogIn(props: Props): JSX.Element {
+function RemoteLogIn(props: Props): JSX.Element {
   const [searchParams] = useSearchParams();
   const { loginWithRedirect } = useAuth0();
 
@@ -76,4 +78,8 @@ export default function LogIn(props: Props): JSX.Element {
         />}
     </div>
   );
+}
+
+export default function LogIn(props: Props): JSX.Element {
+  return isLocalDevelopment ? <LocalLogin /> : <RemoteLogIn {...props} />;
 }

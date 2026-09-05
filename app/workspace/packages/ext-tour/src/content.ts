@@ -1,4 +1,4 @@
-import { getRandomId, sleep, snowflake } from "@fable/common/dist/utils";
+import { getRandomId, snowflake } from "@fable/common/dist/utils";
 import { init as sentryInit } from "@fable/common/dist/sentry";
 import raiseDeferredError from "@fable/common/dist/deferred-error";
 import { nanoid } from "nanoid";
@@ -25,6 +25,27 @@ const FABLE_MSG_LISTENER_DIV_ID = "fable-0-cm-presence";
 const FABLE_DOM_EVT_LISTENER_DIV = "fable-0-de-presence";
 const FABLE_ID_ID = "fable-0-id-id";
 const FABLE_MSG_FROM_IDENTIFIER = "sharefable.com";
+const lifetime = new AbortController();
+const observedDocuments = new Set<Document>();
+const watchedFrames = new WeakSet<HTMLIFrameElement | HTMLObjectElement>();
+const observedWindows = new WeakSet<Window>();
+const cleanups: (() => void)[] = [];
+const uiCleanups: (() => void)[] = [];
+const recorderScope = globalThis as typeof globalThis & { fableRecorderCleanup?: () => void };
+function dismissRecordingUi() {
+  uiCleanups.splice(0).forEach(cleanup => cleanup());
+}
+function cleanupRecording() {
+  lifetime.abort();
+  dismissRecordingUi();
+  cleanups.splice(0).forEach(cleanup => cleanup());
+  for (const doc of Array.from(observedDocuments)) {
+    doc.getElementById(FABLE_DOM_EVT_LISTENER_DIV)?.remove();
+    doc.getElementById(FABLE_MSG_LISTENER_DIV_ID)?.remove();
+  }
+  observedDocuments.clear();
+  delete recorderScope.fableRecorderCleanup;
+}
 
 const isDocHtml4P1 = (el: Node): boolean => {
   const res = !!((el.nodeName || "").toLowerCase() === "html"
@@ -228,6 +249,7 @@ function adjustElementAndGetCandidates(element: HTMLElement) {
 }
 
 const onClickHandler = async (e: MouseEvent) => {
+  if (lifetime.signal.aborted) return;
   if ((e.target as HTMLElement).classList.contains(FABLE_DONT_SER_CLASSNAME)) return;
   let el = e.target;
   let isInsideShadowDom = false;
@@ -272,7 +294,8 @@ function getAllIframesInDoc(type: "crossorigin" | "sameorigin", doc: Document) {
 }
 
 function installMessageListenerInFrame(win: Window, frameId: string) {
-  if (!(win && frameId)) return;
+  if (!(win && frameId) || observedWindows.has(win) || lifetime.signal.aborted) return;
+  observedWindows.add(win);
 
   (win as any).__data_fable_frameid__ = frameId;
   const shouldPropagateToParent = win.parent !== win && win.frameElement === null;
@@ -292,6 +315,7 @@ function installMessageListenerInFrame(win: Window, frameId: string) {
         value: frameId
       }, "*");
     }, 1000);
+    cleanups.push(() => clearInterval(timer));
   }
 
   win.addEventListener("message", msg => {
@@ -311,7 +335,7 @@ function installMessageListenerInFrame(win: Window, frameId: string) {
         fs[0].setAttribute(FABLE_ID_ID, msg.data.value);
       }
     }
-  });
+  }, { signal: lifetime.signal });
 
   const sameOriginFrames = getAllIframesInDoc("sameorigin", win.document);
   sameOriginFrames.forEach(frame => installMessageListenerInFrame(frame.contentWindow!, frameId));
@@ -328,90 +352,45 @@ function installMessageListener(frameId: string) {
   installMessageListenerInFrame(window, frameId);
 }
 
+function watchFrame(frame: HTMLIFrameElement | HTMLObjectElement, parent: Document) {
+  if (watchedFrames.has(frame)) return;
+  watchedFrames.add(frame);
+  frame.addEventListener("load", () => {
+    if (lifetime.signal.aborted) return;
+    installListener(parent);
+    chrome.runtime.sendMessage({ type: Msg.REINJECT_CONTENT_SCRIPT }).catch(() => undefined);
+  }, { signal: lifetime.signal });
+}
+
 function installListener(doc: Document) {
-  const isCreatedNew = createListenerMarkerDivIfNotPresent(doc);
-  if (isCreatedNew) {
-    doc.addEventListener("mousedown", onClickHandler, true);
-    // Checks if an iframe is added dynamically, if yes then onload of all those frames we rerun the installListener
-    // to add listeners to frames that are not listened to.
-    const observer = new MutationObserver(async mutations => {
-      const frames: HTMLIFrameElement[] = [];
-      for (const mutation of mutations) {
-        if (mutation.type === "childList" && mutation.addedNodes.length > 0) {
-          for (const node of Array.from(mutation.addedNodes)) {
-            if (node.nodeName && (node.nodeName.toLowerCase() === "iframe" || node.nodeName.toLowerCase() === "object")) {
-              frames.push(node as HTMLIFrameElement);
-            } else if (node.nodeType === Node.ELEMENT_NODE) {
-              const iframes = (node as HTMLElement).querySelectorAll("iframe");
-              iframes.forEach(frame => frames.push(frame as HTMLIFrameElement));
-            }
-          }
-        }
-      }
-      if (frames.length > 0) {
-        await Promise.race([
-          Promise.all(
-            frames.map(f => new Promise(resolve => {
-              f.onload = resolve;
-            }))
-          ),
-          // In case the onload is already fired on the mounted frames, then f.onload won't be fired,
-          // we use a timeout of 3s before we say the frame is loaded or not
-          // to w
-          sleep(3000),
-        ]);
-
-        const crossOriginFrameOccurances = frames
-          .map(f => f.contentDocument)
-          .filter(d => !d)
-          .length;
-
-        if (crossOriginFrameOccurances) {
-          chrome.runtime.sendMessage<MsgPayload<{}>>({
-            type: Msg.REINJECT_CONTENT_SCRIPT,
-            data: { }
-          });
-        }
-
+  if (lifetime.signal.aborted || !doc.body) return;
+  if (!observedDocuments.has(doc)) {
+    observedDocuments.add(doc);
+    createListenerMarkerDivIfNotPresent(doc);
+    doc.addEventListener("mousedown", onClickHandler, { capture: true, signal: lifetime.signal });
+    const observer = new MutationObserver(mutations => {
+      if (mutations.some(mutation => Array.from(mutation.addedNodes).some(node => node.nodeType === Node.ELEMENT_NODE
+        && ((node as Element).matches("iframe,object") || (node as Element).querySelector("iframe,object"))))) {
         installListener(doc);
+        chrome.runtime.sendMessage({ type: Msg.REINJECT_CONTENT_SCRIPT }).catch(() => undefined);
       }
     });
-    observer.observe(doc, {
-      subtree: true,
-      childList: true
-    });
+    observer.observe(doc, { subtree: true, childList: true });
+    cleanups.push(() => observer.disconnect());
   }
-  const iframes = [
-    ...Array.from(doc.getElementsByTagName("iframe")),
-    ...Array.from(doc.getElementsByTagName("object")),
-  ];
-  const sameOriginDocs = iframes
-    .map(frame => {
-      // Sometime this code can run when a frame is still loading, we run the installListener once more once the frame
-      // loading is completed. Practically during dev/testing we did not see this code getting executed, but logically,
-      // this code is added to guard against such cases. Google-analytics sometime behave weirdly where a listener
-      // won't get registered to the galaxyIFrame. After we added this code we did not notice that behaviour.
-      frame.onload = () => {
-        installListener(doc);
-      };
-      return frame.contentDocument;
-    })
-    .filter(d => !!d);
-
-  if (iframes.length !== sameOriginDocs.length) {
-    chrome.runtime.sendMessage<MsgPayload<{}>>({
-      type: Msg.REINJECT_CONTENT_SCRIPT,
-      data: { }
-    });
+  const frames = Array.from(doc.querySelectorAll<HTMLIFrameElement | HTMLObjectElement>("iframe,object"));
+  for (const shadow of Array.from(doc.querySelectorAll("*")).map(element => element.shadowRoot)) {
+    if (shadow) frames.push(...Array.from(shadow.querySelectorAll<HTMLIFrameElement | HTMLObjectElement>("iframe,object")));
   }
-
-  for (const d of sameOriginDocs) {
+  for (const frame of frames) {
+    watchFrame(frame, doc);
     try {
-      installListener(d!);
-      installMessageListenerInFrame(d!.defaultView!, (doc.defaultView as any).__data_fable_frameid__);
-    } catch (e) {
-      console.error("Error installing msg listeners", e);
-    }
+      const child = frame.contentDocument;
+      if (child) {
+        installListener(child);
+        installMessageListenerInFrame(child.defaultView!, (doc.defaultView as any).__data_fable_frameid__);
+      }
+    } catch { /* A sandboxed or navigated frame may no longer be accessible. */ }
   }
 }
 
@@ -426,6 +405,7 @@ function init() {
   installListener(document);
 
   const onMessageReceiveFromBackground = async (msg: MsgPayload<any>) => {
+    if (lifetime.signal.aborted) return;
     switch (msg.type) {
       case Msg.SCRIPT_INIT_DATA: {
         const tMsg = msg as MsgPayload<ScriptInitReportedData>;
@@ -448,7 +428,9 @@ function init() {
         if (isRootFrame) {
           const countDownModal = new CountDownModal(() => {
             const extensionInfoModal = new ExtensionInfoModal();
+            uiCleanups.push(() => extensionInfoModal.cleanup());
           });
+          uiCleanups.push(() => countDownModal.cleanup(false));
         }
         break;
       }
@@ -461,7 +443,12 @@ function init() {
         break;
       }
 
+      case Msg.END_RECORDING:
+        cleanupRecording();
+        break;
+
       case Msg.STOP_RECORDING: {
+        dismissRecordingUi();
         const tMsg = msg as MsgPayload<StopRecordingData>;
         serialize(false, tMsg.data.id, null);
         break;
@@ -473,6 +460,7 @@ function init() {
   };
 
   chrome.runtime.onMessage.addListener(onMessageReceiveFromBackground);
+  cleanups.push(() => chrome.runtime.onMessage.removeListener(onMessageReceiveFromBackground));
   chrome.runtime.sendMessage<MsgPayload<ScriptInitRequiredData>>({
     type: Msg.SCRIPT_INIT,
     data: { required: "frameId", scriptId: initData.scriptId }
@@ -489,7 +477,8 @@ function createFableZeroPx() {
 
 // This is a guard against content script getting called multiple time when tab gets re-loaded
 // or even url change
-if (document.getElementById(FABLE_MSG_LISTENER_DIV_ID) == null) {
+if (!recorderScope.fableRecorderCleanup) {
+  recorderScope.fableRecorderCleanup = cleanupRecording;
   createFableZeroPx();
   init();
 }

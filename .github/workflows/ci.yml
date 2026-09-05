@@ -38,6 +38,9 @@ jobs:
       - name: Verify generated API contract is committed
         run: git diff --exit-code -- api/gen/api-contract.d.ts
 
+      - name: Verify API contract consumers match generated output
+        run: node scripts/sync-api-contracts.mjs --check
+
   frontend:
     name: Frontend (Node 22)
     runs-on: ubuntu-latest
@@ -93,10 +96,69 @@ jobs:
       - name: Build extension
         run: yarn workspace @fable/ext-tour build-local
 
+      - name: Verify actual extension capture and recovery
+        env:
+          CI: "true"
+          FABLE_EXTENSION_PATH: packages/ext-tour/build
+        run: node node_modules/@playwright/test/cli.js test --config playwright.extension.config.ts
+
       - name: Build client
         env:
           CI: "false"
         run: yarn workspace @fable/client build-staging
+
+  product:
+    name: Local product routes and queue integration
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Set up Node 22.23.2
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22.23.2
+
+      - name: Bootstrap the isolated product stack
+        run: node scripts/local-dev.mjs start
+
+      - name: Install browser test dependencies
+        working-directory: app/workspace
+        run: |
+          corepack enable
+          corepack prepare yarn@1.22.22 --activate
+          yarn install --frozen-lockfile
+          yarn test:e2e:install --with-deps
+
+      - name: Verify actual product routes
+        working-directory: app/workspace
+        env:
+          CI: "true"
+        run: node node_modules/@playwright/test/cli.js test --config playwright.product.config.ts
+
+      - name: Verify actual queue redrive and shutdown
+        run: >-
+          docker run --rm --network fable-local_local
+          --mount "type=bind,source=${{ github.workspace }}/jobs/scripts,target=/usr/sqs_jobs/scripts,readonly"
+          --entrypoint node fable-local-jobs:phase0 scripts/verify-local-queue.js
+
+      - name: Verify durable infrastructure restart
+        run: node scripts/local-dev.mjs verify-restart
+
+      - name: Verify existing product data after restart
+        working-directory: app/workspace
+        env:
+          CI: "true"
+        run: node node_modules/@playwright/test/cli.js test --config playwright.product.config.ts
+
+      - name: Show diagnostics
+        if: failure()
+        run: node scripts/local-dev.mjs logs
+
+      - name: Stop local services
+        if: always()
+        run: node scripts/local-dev.mjs stop
 
   jobs:
     name: Jobs (Node 22)
@@ -123,7 +185,7 @@ jobs:
         run: npm run lint
 
       - name: Test jobs
-        run: npm test -- --runInBand
+        run: docker build --target test --tag flowtale-jobs:test .
 
       - name: Build jobs
         run: npm run build

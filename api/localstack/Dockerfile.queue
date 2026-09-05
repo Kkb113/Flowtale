@@ -1,0 +1,5 @@
+FROM softwaremill/elasticmq:1.7.1@sha256:f1de391a9b8c18fd3f2ce37b4f7d1b8989857e8a8e18bb01284fff899e69da82
+USER root
+RUN mkdir -p /data && chown 999:999 /data
+COPY elasticmq.conf /opt/elasticmq.conf
+USER 999:999

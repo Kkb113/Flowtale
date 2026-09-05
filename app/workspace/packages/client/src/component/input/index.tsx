@@ -22,6 +22,8 @@ export default function Input({
   style,
   ...rest
 }: Props): JSX.Element {
+  const generatedId = React.useId();
+  const inputId = id || generatedId;
   return (
     <Tags.InputContainer size={sz} inline={inline} style={containerStyle}>
       {icon && (
@@ -31,13 +33,13 @@ export default function Input({
       )}
       <input
         placeholder={rest.placeholder || ''}
-        id={id}
+        id={inputId}
         {...rest}
         ref={innerRef}
         style={{ paddingLeft: (icon ? '2.5rem' : '1rem'), ...style }}
         className="typ-ip"
       />
-      <label className="label" htmlFor={id} style={{ paddingLeft: (icon ? '1.5rem' : '0rem') }}>
+      <label className="label" htmlFor={inputId} style={{ paddingLeft: (icon ? '1.5rem' : '0rem') }}>
         <div className="text">{label}</div>
       </label>
     </Tags.InputContainer>

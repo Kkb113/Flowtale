@@ -1,6 +1,7 @@
 package com.sharefable.api.transport;
 
 import lombok.Data;
+import lombok.NoArgsConstructor;
 import lombok.EqualsAndHashCode;
 import lombok.experimental.SuperBuilder;
 
@@ -8,6 +9,7 @@ import lombok.experimental.SuperBuilder;
 @GenerateTSDef
 @SuperBuilder(toBuilder = true)
 @Data
+@NoArgsConstructor
 public class ImgResizingJobInfo extends JobProcessingInfo {
     public static final String DISCRIMINATOR = "RESIZE_IMG";
 

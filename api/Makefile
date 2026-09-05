@@ -1,23 +1,23 @@
 .PHONY: teardown setup gen clean-data setup db-schema-migrate env
 
-include env.now
+-include env.now
 
 teardown:
-	docker compose down;
+	node ../scripts/local-dev.mjs stop
 
 clean-data:
-	docker rm fable-db; docker rm fable-db-flyway; docker volume rm api_mysql-data
+	@echo "Automatic data deletion is retired. Inspect the exact development volumes before manually deleting any data."
+	@exit 1
 
 setup:
-	docker compose --profile ${APP_ENV} up -d
+	node ../scripts/local-dev.mjs start
 
 db-schema-migrate:
-	docker compose up schema_api && docker compose up schema_analytics;
+	docker compose run --rm schema_api && docker compose run --rm schema_analytics
 
 gen:
-	mvn process-classes
-	cp -r ./gen/api-contract.d.ts ../app/workspace/packages/common/src/api-contract.ts
-	cp -r ./gen/api-contract.d.ts ../sqs_jobs/src/api-contract.ts
+	./mvnw process-classes
+	node ../scripts/sync-api-contracts.mjs
 
 # --------------------------------------------------------------
 # Different env file is required for different tool. Like idea

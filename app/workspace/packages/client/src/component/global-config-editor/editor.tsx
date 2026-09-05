@@ -16,6 +16,7 @@ import {
 import { getSampleConfig } from '@fable/common/dist/utils';
 import { LoadingOutlined } from '@ant-design/icons';
 import { traceEvent } from '@fable/common/dist/amplitude';
+import { isLocalDevelopment } from '../../local-development';
 import FileInput from '../file-input';
 import Input from '../input';
 import * as GTags from '../../common-styled';
@@ -86,6 +87,7 @@ export default function Editor(props: Props): JSX.Element {
   }, [gConfig.monoIncKey]);
 
   useEffect(() => {
+    if (isLocalDevelopment) return;
     const linkHref = `https://fonts.googleapis.com/css?family=${gConfig.fontFamily.replace(/\s+/g, '+')}`;
 
     const existingLinks = Array.from(document.head.querySelectorAll('link[gFont]')) as HTMLLinkElement[];

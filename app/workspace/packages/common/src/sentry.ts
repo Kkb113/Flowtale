@@ -4,7 +4,6 @@ import {
   Replay, Transaction,
   BrowserOptions,
   startTransaction,
-  withScope,
   captureMessage,
   captureException,
 } from '@sentry/react';
@@ -95,20 +94,12 @@ export const sentryTxReport = (
   shouldFinish && transaction.finish();
 };
 
-export function sentryCaptureMessage(message: string, data?: string, filename: string = 'errordata.txt') {
-  withScope(scope => {
-    if (data) {
-      scope.addAttachment({ filename, data });
-    }
-    captureMessage(message);
-  });
+// Diagnostics deliberately have no arbitrary attachment interface: capture documents
+// and provider payloads must remain in their authorized product storage.
+export function sentryCaptureMessage(message: string) {
+  captureMessage(message);
 }
 
-export function sentryCaptureException(error: Error, data?: string, filename: string = 'errordata.txt') {
-  withScope(scope => {
-    if (data) {
-      scope.addAttachment({ filename, data });
-    }
-    captureException(error);
-  });
+export function sentryCaptureException(error: Error) {
+  captureException(error);
 }

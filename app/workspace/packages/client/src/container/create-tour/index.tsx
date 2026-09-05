@@ -15,7 +15,8 @@ import { connect } from 'react-redux';
 import { TypeAnimation } from 'react-type-animation';
 import { traceEvent } from '@fable/common/dist/amplitude';
 import raiseDeferredError from '@fable/common/dist/deferred-error';
-import { RespProxyAsset, RespDemoEntity, RespSubscription } from '@fable/common/dist/api-contract';
+import { isApiConflict } from '@fable/common/dist/api';
+import { RespProxyAsset, RespDemoEntity, RespSubscription, RespUser } from '@fable/common/dist/api-contract';
 import {
   EditFilled,
   ArrowLeftOutlined,
@@ -27,7 +28,7 @@ import {
   MessageFilled,
   BulbFilled,
 } from '@ant-design/icons';
-import { Modal, Select, Tooltip } from 'antd';
+import { Alert, Modal, Select, Tooltip } from 'antd';
 import { getSampleConfig } from '@fable/common/dist/utils';
 import { create_guides_router } from '@fable/common/dist/llm-fn-schema/create_guides_router';
 import { suggest_guide_theme } from '@fable/common/dist/llm-fn-schema/suggest_guide_theme';
@@ -36,7 +37,7 @@ import { addNewTourToAllTours, getAllTours, getGlobalConfig, getSubscriptionOrCh
 import { P_RespSubscription, P_RespTour } from '../../entity-processor';
 import { TState } from '../../reducer';
 import { withRouter, WithRouterProps } from '../../router-hoc';
-import { deleteDataFromDb, saveDbDataToAws, getDataFromDb } from './db-utils';
+import { deleteCompletedCapture, saveDbDataToAws, getDataFromDb } from './db-utils';
 import {
   AiDataMap,
   AiItem,
@@ -71,7 +72,10 @@ import {
   processNewScreenApiCalls,
   processScreen,
   randomScreenId,
-  saveAsTour
+  saveAsTour,
+  resumeCreation,
+  reviewAppendDestination,
+  acceptAppendDestination
 } from './utils';
 import { amplitudeAddScreensToTour } from '../../amplitude';
 import { AMPLITUDE_EVENTS } from '../../amplitude/events';
@@ -95,7 +99,8 @@ import OnboardingLayout from '../user-onboarding/layout';
 import { addToGlobalAppData } from '../../global';
 import QuillyJson from '../../assets/quilly.json';
 
-const reactanimated = require('react-animated-css');
+import { CreationJournal } from './creation-journal';
+import CreationStep from '../../component/create-tour/creation-step';
 
 const LottiePlayer = lazy(() => import('@lottiefiles/react-lottie-player').then(({ Player }) => ({
   default: Player
@@ -119,6 +124,7 @@ const mapDispatchToProps = (dispatch: any) => ({
 });
 
 interface IAppStateProps {
+  principal: RespUser | null;
   tours: P_RespTour[];
   allToursLoaded: boolean;
   globalConfig: IGlobalConfig | null;
@@ -127,6 +133,7 @@ interface IAppStateProps {
 }
 
 const mapStateToProps = (state: TState): IAppStateProps => ({
+  principal: state.default.principal,
   tours: state.default.tours,
   allToursLoaded: state.default.allToursLoadingStatus === LoadingStatus.Done,
   globalConfig: state.default.globalConfig,
@@ -148,6 +155,9 @@ type IProps = IOwnProps &
   }>;
 
 type IOwnStateProps = {
+  creationError: string | null;
+  appendConflict: boolean;
+  reviewedDestination: P_RespTour | null;
   loading: boolean;
   showSaveWizard: boolean;
   saving: boolean;
@@ -193,6 +203,16 @@ type IOwnStateProps = {
 }
 
 class CreateTour extends React.PureComponent<IProps, IOwnStateProps> {
+  private mounted = false;
+
+  private journal: CreationJournal | null = null;
+
+  private releaseCreationLock: (() => void) | null = null;
+
+  private saveInFlight = false;
+
+  private imageWorker: Worker | null = null;
+
   private data: DBData | null;
 
   private db: IDBDatabase | null;
@@ -218,6 +238,9 @@ class CreateTour extends React.PureComponent<IProps, IOwnStateProps> {
   constructor(props: IProps) {
     super(props);
     this.state = {
+      creationError: null,
+      appendConflict: false,
+      reviewedDestination: null,
       loading: true,
       showSaveWizard: false,
       saving: false,
@@ -270,14 +293,47 @@ class CreateTour extends React.PureComponent<IProps, IOwnStateProps> {
 
   async initDbOperations(): Promise<void> {
     this.db = await openDb(DB_NAME, OBJECT_STORE, 1, OBJECT_KEY);
+    if (!this.mounted) { this.db.close(); return; }
     const dbData = await getDataFromDb(this.db, OBJECT_STORE, OBJECT_KEY_VALUE) as DBData;
     if (dbData) {
       this.data = dbData;
 
-      this.setState({ loading: false, showSaveWizard: true, });
-      this.processScreens();
+      const principal = this.props.principal?.id;
+      const workspace = localStorage.getItem('fable/oid');
+      if (!principal || !workspace) throw new Error('Sign in to your workspace before recovering this recording.');
+      const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(dbData.screensData));
+      const fingerprint = Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('');
+      const anonymousDemoId = dbData.captureSessionId || fingerprint;
+      if (!navigator.locks) throw new Error('Use a browser with Web Locks support to safely create this demo.');
+      await new Promise<void>((resolve, reject) => {
+        navigator.locks.request('fable-create-recording', { ifAvailable: true }, async lock => {
+          if (!lock) { reject(new Error('This recording is being processed in another tab. Close that tab, then retry.')); return; }
+          await new Promise<void>(release => { this.releaseCreationLock = release; resolve(); });
+        }).catch(reject);
+      });
+      if (!this.mounted) { this.releaseCreationLock?.(); return; }
+      this.journal = await CreationJournal.open(principal, workspace, anonymousDemoId, fingerprint, () => {
+        if (!this.mounted || this.props.principal?.id !== principal || localStorage.getItem('fable/oid') !== workspace) {
+          throw new Error('Creation paused because your sign-in or workspace changed. Return to the original workspace to resume.');
+        }
+      });
+      const resumed = await resumeCreation(this.journal);
+      if (resumed) {
+        await deleteCompletedCapture(this.db, OBJECT_STORE, dbData);
+        this.props.addNewTourToAllTours(resumed.data);
+        this.props.navigate(`/demo/${resumed.data.rid}`);
+        return;
+      }
+      await new Promise<void>(resolve => {
+        this.setState({ loading: false, showSaveWizard: true, anonymousDemoId }, resolve);
+      });
+      addToGlobalAppData('anonymousDemoId', anonymousDemoId);
       this.createSuggestionsForTheme();
-      saveDbDataToAws(dbData, this.state.anonymousDemoId);
+      // The private archive is only used by AI; manual creation retains the browser capture on failure.
+      saveDbDataToAws(dbData, anonymousDemoId).catch(() => {
+        if (this.mounted) this.setState({ aiGenerationNotPossible: true });
+      });
+      await this.processScreens();
       return;
     }
     captureException('No data found in indexedDB in createTour');
@@ -367,97 +423,100 @@ class CreateTour extends React.PureComponent<IProps, IOwnStateProps> {
   }
 
   processAndSetScreen = async (
+    step: number,
     frames: FrameDataToBeProcessed[],
     mainFrame: FrameDataToBeProcessed | undefined,
     imageData: string,
     elPath: string
   ): Promise<void> => {
-    let screenInfo: ScreenInfo;
-    const res = await processNewScreenApiCalls(
+    const screenInfo = await this.journal!.checkpoint(`processed/${step}`, async () => {
+      let info: ScreenInfo;
+      const res = await processNewScreenApiCalls(
+      this.journal!,
+      step,
       frames,
       mainFrame,
       imageData,
       elPath
-    );
+      );
 
-    if (res.skipped) {
-      screenInfo = { info: null, skipped: true, vpd: null };
-    } else {
-      const data = res.data!;
-      screenInfo = {
-        info: {
-          id: data.id,
-          elPath: res.elPath,
-          icon: data.icon,
-          type: data.type,
-          rid: data.rid,
-          replacedWithImgScreen: res.replacedWithImgScreen,
-          thumbnail: data.thumbnail,
-          markedImage: null
-        },
-        skipped: res.skipped,
-        vpd: res.vpd,
-      };
-    }
+      if (res.skipped) {
+        info = { info: null, skipped: true, vpd: null };
+      } else {
+        const data = res.data!;
+        info = {
+          info: {
+            id: data.id,
+            elPath: res.elPath,
+            icon: data.icon,
+            type: data.type,
+            rid: data.rid,
+            replacedWithImgScreen: res.replacedWithImgScreen,
+            thumbnail: data.thumbnail,
+            markedImage: null
+          },
+          skipped: res.skipped,
+          vpd: res.vpd,
+        };
+      }
+      return info;
+    });
     this.setState((prevState: Readonly<IOwnStateProps>) => (
       { ...prevState, screens: [...prevState.screens, screenInfo] }
     ));
   };
 
-  proxyAllAssets = (
+  proxyAllAssets = async (
     framesProssesResult: FrameProcessResult[],
     proxyCache: Map<string, RespProxyAsset>
-  ): Promise<string> => new Promise((resolve, reject) => {
-    (async () => {
-      let totalAssets = 0;
-      for (let i = 0; i < framesProssesResult.length; i++) {
-        for (let j = 0; j < framesProssesResult[i].assetOperation.length; j++) {
-          const asset = framesProssesResult[i].assetOperation[j];
-          if (asset.type === 'proxyAsset') {
-            totalAssets += Object.entries(asset.node.props.proxyUrlMap).length;
-          } else if (asset.type === 'base64') {
-            totalAssets += 1;
-          }
+  ): Promise<void> => {
+    let totalAssets = 0;
+    for (let i = 0; i < framesProssesResult.length; i++) {
+      for (let j = 0; j < framesProssesResult[i].assetOperation.length; j++) {
+        const asset = framesProssesResult[i].assetOperation[j];
+        if (asset.type === 'proxyAsset') {
+          totalAssets += Object.entries(asset.node.props.proxyUrlMap).length;
+        } else if (asset.type === 'base64') {
+          totalAssets += 1;
         }
       }
-      this.setState({
-        screenProgressData: { currentScreen: 0, totalScreens: framesProssesResult.length },
-        proxyAssetProgressData: { currentAsset: 0, totalAssets }
-      });
+    }
+    this.setState({
+      screenProgressData: { currentScreen: 0, totalScreens: framesProssesResult.length },
+      proxyAssetProgressData: { currentAsset: 0, totalAssets }
+    });
 
-      for (let i = 0; i < framesProssesResult.length; i++) {
-        const frameProcessResult = framesProssesResult[i];
-        const resp = await handleAssetOperation(
-          frameProcessResult.assetOperation,
-          proxyCache,
-          frameProcessResult.mainFrame,
-          (progress) => {
-            this.setState(prevState => ({
-              ...prevState,
-              proxyAssetProgressData: {
-                ...prevState.proxyAssetProgressData,
-                currentAsset: prevState.proxyAssetProgressData.currentAsset + progress
-              }
-            }));
-          }
-        );
-        this.setState(state => ({ localhostAssetRecorded: state.localhostAssetRecorded || resp.isLocalhostAssetRecorded }));
-      }
+    for (let i = 0; i < framesProssesResult.length; i++) {
+      const frameProcessResult = framesProssesResult[i];
+      const resp = await handleAssetOperation(
+        frameProcessResult.assetOperation,
+        proxyCache,
+        frameProcessResult.mainFrame,
+        (progress) => {
+          this.setState(prevState => ({
+            ...prevState,
+            proxyAssetProgressData: {
+              ...prevState.proxyAssetProgressData,
+              currentAsset: prevState.proxyAssetProgressData.currentAsset + progress
+            }
+          }));
+        }
+      );
+      this.setState(state => ({ localhostAssetRecorded: state.localhostAssetRecorded || resp.isLocalhostAssetRecorded }));
+    }
 
-      for (let i = 0; i < framesProssesResult.length; i++) {
-        const data = framesProssesResult[i];
-        await this.processAndSetScreen(data.frames, data.mainFrame, data.imageData, data.elPath);
-        this.setState(prevState => ({
-          ...prevState,
-          screenProgressData: {
-            ...prevState.screenProgressData,
-            currentScreen: prevState.screenProgressData.currentScreen + 1
-          }
-        }));
-      }
-      resolve('');
-    })();
-  });
+    for (let i = 0; i < framesProssesResult.length; i++) {
+      const data = framesProssesResult[i];
+      await this.processAndSetScreen(i, data.frames, data.mainFrame, data.imageData, data.elPath);
+      this.setState(prevState => ({
+        ...prevState,
+        screenProgressData: {
+          ...prevState.screenProgressData,
+          currentScreen: prevState.screenProgressData.currentScreen + 1
+        }
+      }));
+    }
+  };
 
   processScreens = async (): Promise<void> => {
     this.sentryTransaction = sentryStartTransaction('saveCreateTour');
@@ -495,13 +554,15 @@ class CreateTour extends React.PureComponent<IProps, IOwnStateProps> {
       this.setState({ allScreensCreated: true });
       return d;
     });
-    const unmarkedImages = await Promise.all(frameThumbnailPromise);
+    const [, unmarkedImages] = await Promise.all([screenPromise, Promise.all(frameThumbnailPromise)]);
+    if (!this.mounted) return;
     this.setState({ unmarkedImages });
 
     // if no click is recorded or only one screen is recorded don't process using AI
     if (interactionCtx.length === 0 || frameDataToBeProcessed.length === 1) this.setState({ aiGenerationNotPossible: true });
 
     const llmWorker = new Worker(new URL('./llm-opts.ts', import.meta.url));
+    this.imageWorker = llmWorker;
     const imagesWithMarkPromise: {prm: Promise<string>, idx: number}[] = [];
     let markedImagesReceived = 0;
     const totalImages = unmarkedImages.length;
@@ -522,19 +583,20 @@ class CreateTour extends React.PureComponent<IProps, IOwnStateProps> {
           if (e.data.from === 'fable-worker') {
             const imageName = `marked_image_${e.data.id}.png`;
             const file = new File([e.data.markImg], `temp${Math.random()}`, { type: LLM_IMAGE_TYPE });
-            const d = uploadMarkedImageToAws(LLM_IMAGE_TYPE, this.state.anonymousDemoId, imageName, file);
+            const d = uploadMarkedImageToAws(LLM_IMAGE_TYPE, this.state.anonymousDemoId, imageName, file).catch(() => {
+              if (this.mounted) this.setState({ aiGenerationNotPossible: true });
+              return '';
+            });
             imagesWithMarkPromise.push({ prm: d, idx: e.data.id });
             this.interactionCtxFromId.set(e.data.id, e.data.ctx);
             markedImagesReceived++;
-            this.handleMarkImage(imagesWithMarkPromise, totalImages === markedImagesReceived);
+            await this.handleMarkImage(imagesWithMarkPromise, totalImages === markedImagesReceived);
           }
         };
 
         llmWorker.onerror = (err) => {
-          console.log(err);
-          markedImagesReceived++;
-          this.handleMarkImage(imagesWithMarkPromise, totalImages === markedImagesReceived);
-          // TODO handle error
+          llmWorker.terminate();
+          if (this.mounted) this.setState({ aiGenerationNotPossible: true });
         };
       } else {
         // skip marking image if interactionCtx data is not present for that screen
@@ -544,7 +606,7 @@ class CreateTour extends React.PureComponent<IProps, IOwnStateProps> {
       k++;
     });
 
-    await screenPromise;
+    await this.handleMarkImage(imagesWithMarkPromise, totalImages === markedImagesReceived);
     this.setState({ isScreenProcessed: true });
   };
 
@@ -553,6 +615,7 @@ class CreateTour extends React.PureComponent<IProps, IOwnStateProps> {
     shouldProcess: boolean
   ): Promise<void> => {
     if (!shouldProcess) return;
+    this.imageWorker?.terminate();
     const imagesPromiseArr = imagesWithMarkPromise.map(item => item.prm);
     const imagesWithMark = await Promise.all(imagesPromiseArr);
 
@@ -560,7 +623,10 @@ class CreateTour extends React.PureComponent<IProps, IOwnStateProps> {
       id: item.idx,
       url: imagesWithMark[index]
     })).sort((a, b) => a.id - b.id);
-    this.setState({ imageWithMarkUrls: imageUrlArr });
+    if (this.mounted) {
+      this.setState({ imageWithMarkUrls: imageUrlArr.filter(item => item.url),
+        aiGenerationNotPossible: !imageUrlArr.length || imageUrlArr.some(item => !item.url) });
+    }
   };
 
   createNewTour = (): void => {
@@ -573,12 +639,11 @@ class CreateTour extends React.PureComponent<IProps, IOwnStateProps> {
     demoDescription: string,
     createdUsingAi: boolean,
   ): Promise<void> => {
-    if (!this.db) {
-      return;
-    }
+    if (!this.db || !this.journal) throw new Error('Capture recovery storage is not ready. Reload to retry.');
     this.setState({ saving: true, showSaveWizard: false });
 
     const tour = await saveAsTour(
+      this.journal!,
       screensWithAIInfo,
       null,
       this.props.globalConfig!,
@@ -596,7 +661,7 @@ class CreateTour extends React.PureComponent<IProps, IOwnStateProps> {
     setEventCommonState(CmnEvtProp.TOUR_URL, createIframeSrc(`/demo/${tour.data.rid}`));
 
     sentryTxReport(this.sentryTransaction, 'screensCount', this.state.screens.length, 'byte');
-    await deleteDataFromDb(this.db, OBJECT_STORE, OBJECT_KEY_VALUE);
+    await deleteCompletedCapture(this.db, OBJECT_STORE, this.data!);
     this.props.addNewTourToAllTours(tour.data);
 
     traceEvent(
@@ -638,12 +703,12 @@ class CreateTour extends React.PureComponent<IProps, IOwnStateProps> {
     screensWithAIInfo: ScreenInfoWithAI[],
     createdUsingAI: boolean
   ): Promise<void> => {
-    if (!this.data || !this.db || !value) {
-      return;
-    }
+    if (!this.data || !this.db || !this.journal || !value) throw new Error('Select a destination demo before saving.');
     const existingTour = this.props.tours.filter(el => el.rid === value)[0];
+    if (!existingTour) throw new Error('The destination demo is unavailable. Reload your demos before retrying.');
     this.setState({ saving: true, showSaveWizard: false, tourName: existingTour.displayName });
     const tour = await saveAsTour(
+      this.journal!,
       screensWithAIInfo,
       existingTour,
       this.props.globalConfig!,
@@ -656,16 +721,17 @@ class CreateTour extends React.PureComponent<IProps, IOwnStateProps> {
     );
     amplitudeAddScreensToTour(this.state.screens.length, 'ext');
     sentryTxReport(this.sentryTransaction, 'screensCount', this.state.screens.length, 'byte');
-    await deleteDataFromDb(this.db, OBJECT_STORE, OBJECT_KEY_VALUE);
+    await deleteCompletedCapture(this.db, OBJECT_STORE, this.data!);
 
     const params = createdUsingAI ? `?${AI_PARAM}` : '';
     this.props.navigate(`/demo/${tour.data.rid}${params}`);
   };
 
   componentDidMount(): void {
+    this.mounted = true;
     document.title = this.props.title;
     this.setState({ loading: true });
-    this.initDbOperations();
+    this.initDbOperations().catch(this.handleCreationFailure);
     this.props.getAllTours();
     this.props.getGlobalConfig();
     this.updateCreditsAvailability();
@@ -679,9 +745,11 @@ class CreateTour extends React.PureComponent<IProps, IOwnStateProps> {
       || prevState.imageWithMarkUrls !== this.state.imageWithMarkUrls
     ) {
       if (this.state.isReadyToSave && this.state.isScreenProcessed
-        && (this.state.imageWithMarkUrls.length !== 0 || this.state.aiGenerationNotPossible)
-        && (this.state.creationMode !== 'ai' || this.state.isAIProcessed)) {
-        this.processAIDataAndCallSaveTour();
+        && (this.state.creationMode !== 'ai'
+          || (this.state.isAIProcessed && (this.state.imageWithMarkUrls.length !== 0 || this.state.aiGenerationNotPossible)))
+        && !this.saveInFlight && !this.state.creationError) {
+        this.saveInFlight = true;
+        this.processAIDataAndCallSaveTour().catch(this.handleCreationFailure).finally(() => { this.saveInFlight = false; });
       }
     }
 
@@ -726,6 +794,12 @@ class CreateTour extends React.PureComponent<IProps, IOwnStateProps> {
       && this.state.saveType
       && this.state.aiGenerationNotPossible
     ) {
+      if (this.state.saveType === 'existing_tour'
+        && this.state.currentDisplayState === DisplayState.ShowAddExistingTourOptions) {
+        // Keep the destination chooser usable for no-click/manual recordings.
+        this.setState({ creationMode: 'manual' });
+        return;
+      }
       this.setState({
         prevDisplayState: DisplayState.ShowAiGenerationNotPossible,
         currentDisplayState: DisplayState.ShowAiGenerationNotPossible,
@@ -743,7 +817,7 @@ class CreateTour extends React.PureComponent<IProps, IOwnStateProps> {
     }
   };
 
-  processAIDataAndCallSaveTour = (): void => {
+  processAIDataAndCallSaveTour = async (): Promise<void> => {
     // add marked image here
 
     const screensWithMarkedImage = this.state.screens.map((screen, index) => {
@@ -924,11 +998,11 @@ class CreateTour extends React.PureComponent<IProps, IOwnStateProps> {
     }
 
     if (this.state.saveType === 'new_tour') {
-      this.saveTour(screensWithAIAnnData, demoTitle, demoDescription, this.state.creationMode === 'ai');
+      await this.saveTour(screensWithAIAnnData, demoTitle, demoDescription, this.state.creationMode === 'ai');
     }
 
     if (this.state.saveType === 'existing_tour') {
-      this.saveInExistingTour(this.state.existingTourRId, screensWithAIAnnData, this.state.creationMode === 'ai');
+      await this.saveInExistingTour(this.state.existingTourRId, screensWithAIAnnData, this.state.creationMode === 'ai');
     }
 
     deleteSurveyStatusFromLocalStore();
@@ -940,8 +1014,45 @@ class CreateTour extends React.PureComponent<IProps, IOwnStateProps> {
   };
 
   componentWillUnmount(): void {
+    this.mounted = false;
+    this.journal?.close();
+    this.releaseCreationLock?.();
+    this.imageWorker?.terminate();
     this.db?.close();
   }
+
+  private handleCreationFailure = (error: unknown): void => {
+    if (this.mounted) {
+      this.setState({ loading: false,
+        saving: false,
+        isReadyToSave: false,
+        appendConflict: isApiConflict(error),
+        reviewedDestination: null,
+        creationError: error instanceof Error ? error.message : 'The recording could not be processed.' });
+    }
+  };
+
+  private reviewAppend = async (): Promise<void> => {
+    if (!this.journal || this.state.saving) return;
+    this.setState({ saving: true });
+    try {
+      const destination = await reviewAppendDestination(this.journal);
+      if (this.mounted) this.setState({ reviewedDestination: destination });
+    } catch (error) {
+      if (this.mounted) this.setState({ creationError: error instanceof Error ? error.message : 'Unable to load the destination.' });
+    } finally {
+      if (this.mounted) this.setState({ saving: false });
+    }
+  };
+
+  private acceptAppend = async (): Promise<void> => {
+    if (!this.journal || !this.state.reviewedDestination || this.state.saving) return;
+    this.setState({ saving: true });
+    try {
+      await acceptAppendDestination(this.journal, this.state.reviewedDestination);
+      window.location.reload();
+    } catch (error) { this.handleCreationFailure(error); }
+  };
 
   addTextToAllAns = async (
     anonymousDemoId: string,
@@ -1045,14 +1156,15 @@ class CreateTour extends React.PureComponent<IProps, IOwnStateProps> {
 
   handleFinishCreatingDemoManually = (): void => {
     if (this.state.saveType === 'existing_tour') {
-      this.setState({
+      this.setState(state => ({
         creationMode: 'manual',
-        isReadyToSave: true,
-        saving: true,
+        isReadyToSave: Boolean(state.existingTourRId),
+        saving: Boolean(state.existingTourRId),
+        showSaveWizard: !state.existingTourRId,
         showAiFlow: false,
         prevDisplayState: DisplayState.ShowAddExistingTourOptions,
         currentDisplayState: DisplayState.ShowAddExistingTourOptions
-      });
+      }));
     } else {
       this.setState({
         creationMode: 'manual',
@@ -1113,6 +1225,27 @@ class CreateTour extends React.PureComponent<IProps, IOwnStateProps> {
   };
 
   render(): ReactElement {
+    if (this.state.creationError) {
+      return (
+        <OnboardingLayout>
+          <Alert type="error" showIcon message="Demo creation paused" description={this.state.creationError} />
+          <p>Your recording and saved creation steps remain in this browser.</p>
+          {this.state.appendConflict && (
+            <>
+              <p>The destination changed. Review its current version before appending your recording. Existing edits will be preserved.</p>
+              {this.state.reviewedDestination ? (
+                <>
+                  <p>{this.state.reviewedDestination.displayName} — updated {new Date(this.state.reviewedDestination.updatedAt).toLocaleString()}</p>
+                  <a href={`/demo/${this.state.reviewedDestination.rid}`} target="_blank" rel="noreferrer">Open destination for review</a>
+                  <Button intent="primary" disabled={this.state.saving} onClick={this.acceptAppend}>Append recording to this version</Button>
+                </>
+              ) : <Button intent="primary" disabled={this.state.saving} onClick={this.reviewAppend}>Review updated destination</Button>}
+            </>
+          )}
+          <Button intent="primary" disabled={this.state.saving} onClick={() => window.location.reload()}>Retry creation</Button>
+        </OnboardingLayout>
+      );
+    }
     let heading = '';
     let subheading = '';
     let contentWidth = '45%';
@@ -1260,7 +1393,7 @@ class CreateTour extends React.PureComponent<IProps, IOwnStateProps> {
             </Tags.HeaderText>
             <Tags.SubheaderText>{subheading}</Tags.SubheaderText>
             <div>
-              <reactanimated.Animated
+              <CreationStep
                 animationIn={
                   this.state.currentDisplayState < this.state.prevDisplayState
                     ? 'fadeInLeft' : 'jackInTheBox'
@@ -1283,14 +1416,15 @@ class CreateTour extends React.PureComponent<IProps, IOwnStateProps> {
                   <Button
                     iconPlacement="left"
                     onClick={() => {
-                      this.setState({
-                        currentDisplayState: DisplayState.ShowAddProductDescriptionOptions,
+                      this.setState(state => ({
+                        currentDisplayState: state.aiGenerationNotPossible
+                          ? DisplayState.ShowAiGenerationNotPossible : DisplayState.ShowAddProductDescriptionOptions,
                         prevDisplayState: DisplayState.ShowTourCreationOptions,
                         showAiFlow: true,
                         showSaveWizard: false,
                         saveType: 'new_tour',
                         creationMode: 'ai'
-                      });
+                      }));
                       this.startTime = Date.now();
                     }}
                     icon={<PlusOutlined />}
@@ -1325,7 +1459,7 @@ class CreateTour extends React.PureComponent<IProps, IOwnStateProps> {
                         title: 'Are you sure you don\'t want to continue?',
                         icon: <DeleteOutlined />,
                         onOk: async () => {
-                          if (this.db) await deleteDataFromDb(this.db, OBJECT_STORE, OBJECT_KEY_VALUE);
+                          if (this.db) await deleteCompletedCapture(this.db, OBJECT_STORE, this.data!);
                           this.props.navigate('/demos');
                         },
                         onCancel() { }
@@ -1336,8 +1470,8 @@ class CreateTour extends React.PureComponent<IProps, IOwnStateProps> {
                     <span className="target">not save this.</span>
                   </Tags.DangerButton>
                 </div>
-              </reactanimated.Animated>
-              <reactanimated.Animated
+              </CreationStep>
+              <CreationStep
                 animationIn={animIn}
                 animationOut={animOut}
                 animationInDuration={500}
@@ -1377,6 +1511,7 @@ class CreateTour extends React.PureComponent<IProps, IOwnStateProps> {
                             openSelect: false
                           })}
                           showSearch
+                          optionFilterProp="label"
                           options={this.props.tours.map(t => ({
                             label: t.displayName,
                             value: t.rid
@@ -1419,8 +1554,8 @@ class CreateTour extends React.PureComponent<IProps, IOwnStateProps> {
                       <Loader width="240px" />
                     )}
                 </div>
-              </reactanimated.Animated>
-              <reactanimated.Animated
+              </CreationStep>
+              <CreationStep
                 animationIn={animIn}
                 animationOut={animOut}
                 animationInDuration={500}
@@ -1464,8 +1599,8 @@ class CreateTour extends React.PureComponent<IProps, IOwnStateProps> {
                     </Button>
                   </Tags.ModalButtonsContainer>
                 </div>
-              </reactanimated.Animated>
-              <reactanimated.Animated
+              </CreationStep>
+              <CreationStep
                 animationIn={animIn}
                 animationOut={animOut}
                 animationInDuration={500}
@@ -1529,8 +1664,8 @@ class CreateTour extends React.PureComponent<IProps, IOwnStateProps> {
                     </Button>
                   </Tags.ModalButtonsContainer>
                 </div>
-              </reactanimated.Animated>
-              <reactanimated.Animated
+              </CreationStep>
+              <CreationStep
                 animationIn={animIn}
                 animationOut={animOut}
                 animationInDuration={500}
@@ -1592,8 +1727,8 @@ class CreateTour extends React.PureComponent<IProps, IOwnStateProps> {
                     </Button>
                   </Tags.ModalButtonsContainer>
                 </div>
-              </reactanimated.Animated>
-              <reactanimated.Animated
+              </CreationStep>
+              <CreationStep
                 animationIn={animIn}
                 animationOut={animOut}
                 animationInDuration={500}
@@ -1666,7 +1801,7 @@ class CreateTour extends React.PureComponent<IProps, IOwnStateProps> {
                     </Button>
                   </Tags.ModalButtonsContainer>
                 </div>
-              </reactanimated.Animated>
+              </CreationStep>
             </div>
           </div>
         </OnboardingLayout>
@@ -1725,16 +1860,18 @@ class CreateTour extends React.PureComponent<IProps, IOwnStateProps> {
             </Tags.RetryOverlay>
           )}
           <OnboardingLayout style={{
-            overflow: 'scroll'
+            overflow: 'scroll',
+            flexDirection: 'column'
           }}
           >
-            <reactanimated.Animated
+            <CreationStep
               animationIn="fadeInRight"
               animationOut="fadeOutLeft"
               animationInDuration={200}
               animationOutDuration={200}
               animateOnMount
               style={{
+                position: 'relative',
                 zIndex: this.state.currentDisplayState === DisplayState.ShowAddProductDescriptionOptions ? 5 : 1
               }}
               isVisible={this.state.currentDisplayState === DisplayState.ShowAddProductDescriptionOptions}
@@ -1896,22 +2033,16 @@ class CreateTour extends React.PureComponent<IProps, IOwnStateProps> {
                     )}
                   </Tags.CardContentCon>
                 </Tags.ProductCardCon>
-                <Tags.ManualDemoContainer>
-                  <Tags.ManualDemo
-                    onClick={this.handleFinishCreatingDemoManually}
-                  >
-                    Finish creating the demo manually
-                  </Tags.ManualDemo>
-                </Tags.ManualDemoContainer>
               </Tags.Con>
-            </reactanimated.Animated>
-            <reactanimated.Animated
+            </CreationStep>
+            <CreationStep
               animationIn="fadeInRight"
               animationOut="fadeOutLeft"
               animationInDuration={200}
               animationOutDuration={200}
               animateOnMount={false}
               style={{
+                position: 'relative',
                 zIndex: this.state.currentDisplayState === DisplayState.ShowColorPaletteOptions ? 5 : 1
               }}
               isVisible={this.state.currentDisplayState === DisplayState.ShowColorPaletteOptions}
@@ -2053,14 +2184,15 @@ class CreateTour extends React.PureComponent<IProps, IOwnStateProps> {
                   </Tags.CardContentCon>
                 </Tags.ProductCardCon>
               </Tags.Con>
-            </reactanimated.Animated>
-            <reactanimated.Animated
+            </CreationStep>
+            <CreationStep
               animationIn="fadeInRight"
               animationOut="fadeOutLeft"
               animationInDuration={200}
               animationOutDuration={200}
               animateOnMount={false}
               style={{
+                position: 'relative',
                 zIndex: this.state.currentDisplayState === DisplayState.ShowAIAddExistingTourCreditOptions ? 5 : 1
               }}
               isVisible={this.state.currentDisplayState === DisplayState.ShowAIAddExistingTourCreditOptions}
@@ -2076,22 +2208,15 @@ class CreateTour extends React.PureComponent<IProps, IOwnStateProps> {
                     />
                   </Tags.CardContentCon>
                 </Tags.ProductCardCon>
-                <Tags.ManualDemoContainer>
-                  <Tags.ManualDemo
-                    className="typ-sm"
-                    onClick={this.handleFinishCreatingDemoManually}
-                  >
-                    Finish creating the demo manually
-                  </Tags.ManualDemo>
-                </Tags.ManualDemoContainer>
               </Tags.Con>
-            </reactanimated.Animated>
-            <reactanimated.Animated
+            </CreationStep>
+            <CreationStep
               animationIn="fadeInRight"
               animationOut="fadeOutLeft"
               animationInDuration={200}
               animationOutDuration={200}
               animateOnMount={false}
+              style={{ position: 'relative' }}
               isVisible={this.state.currentDisplayState === DisplayState.ShowAiGenerationNotPossible}
             >
               <Tags.Con>
@@ -2100,16 +2225,15 @@ class CreateTour extends React.PureComponent<IProps, IOwnStateProps> {
                     You haven't recorded enough screens for AI Demo creation. Please manually create the demo.
                   </Tags.CardContentCon>
                 </Tags.ProductCardCon>
-                <Tags.ManualDemoContainer>
-                  <Tags.ManualDemo
-                    className="typ-sm"
-                    onClick={this.handleFinishCreatingDemoManually}
-                  >
-                    Finish creating the demo manually
-                  </Tags.ManualDemo>
-                </Tags.ManualDemoContainer>
               </Tags.Con>
-            </reactanimated.Animated>
+            </CreationStep>
+            {this.state.currentDisplayState !== DisplayState.ShowColorPaletteOptions && (
+              <Tags.ManualDemoContainer>
+                <Tags.ManualDemo onClick={this.handleFinishCreatingDemoManually}>
+                  Finish creating the demo manually
+                </Tags.ManualDemo>
+              </Tags.ManualDemoContainer>
+            )}
           </OnboardingLayout>
         </>
       );

@@ -42,7 +42,6 @@ import {
   TUserPropChange,
   TTourWithLoader,
   TSaveTourLoader,
-  TAutosavingLoader,
   TScreenUpdate,
   TTourPublished,
   TElpath,
@@ -384,13 +383,6 @@ export default function projectReducer(state = initialState, action: Action) {
       return newState;
     }
 
-    case ActionType.AUTOSAVING_LOADER: {
-      const tAction = action as TAutosavingLoader;
-      const newState = { ...state };
-      newState.isAutoSavingLoader = tAction.isAutosavingLoader;
-      return newState;
-    }
-
     case ActionType.OPS_IN_PROGRESS: {
       const tAction = action as TOpsInProgress;
       const newState = { ...state };
@@ -561,12 +553,15 @@ export default function projectReducer(state = initialState, action: Action) {
 
     case ActionType.SAVE_EDIT_CHUNKS: {
       const tAction = action as TSaveEditChunks;
-      const newState = { ...state };
+      const newState = { ...state,
+        localEdits: { ...state.localEdits },
+        remoteEdits: { ...state.remoteEdits },
+        screenEdits: { ...state.screenEdits } };
       if (tAction.isLocal) {
         newState.localEdits[tAction.screenId] = [...tAction.editList];
       } else {
         newState.remoteEdits[tAction.screenId] = [...tAction.editList];
-        newState.localEdits[tAction.screenId] = [];
+        if (!tAction.preserveLocal) newState.localEdits[tAction.screenId] = [];
         newState.screenEdits[tAction.screenId] = tAction.editFile!;
       }
       return newState;
@@ -578,7 +573,7 @@ export default function projectReducer(state = initialState, action: Action) {
       if (tAction.isLocal) {
         newState.localGlobalEdits = [...tAction.editList];
       } else {
-        newState.localGlobalEdits = [];
+        if (!tAction.preserveLocal) newState.localGlobalEdits = [];
         newState.remoteGlobalEdits = [...tAction.editList];
         newState.globalEditFile = tAction.editFile!;
       }
@@ -594,13 +589,15 @@ export default function projectReducer(state = initialState, action: Action) {
         newState.localAnnotationsIdMap = tAction.idMap;
         newState.journey = tAction.journey;
       } else {
-        newState.localTourOpts = null;
-        newState.localAnnotations = {};
-        newState.localAnnotationsIdMap = {};
+        if (!tAction.preserveLocal) {
+          newState.localTourOpts = null;
+          newState.localAnnotations = {};
+          newState.localAnnotationsIdMap = {};
+        }
         newState.remoteAnnotations = tAction.annotations;
         newState.remoteTourOpts = tAction.opts;
         newState.tourData = tAction.data;
-        newState.journey = tAction.journey;
+        if (!tAction.preserveLocal) newState.journey = tAction.journey;
       }
       return newState;
     }
@@ -608,8 +605,8 @@ export default function projectReducer(state = initialState, action: Action) {
     case ActionType.SAVE_TOUR_LOADER: {
       const tAction = action as TSaveTourLoader;
       const newState = { ...state };
-      newState.tourLoaderData = tAction.loader;
-      newState.isAutoSavingLoader = false;
+      if (!tAction.preserveLocal) newState.tourLoaderData = tAction.loader;
+      newState.isAutoSavingLoader = !!(tAction.pending || tAction.preserveLocal);
       return newState;
     }
 

@@ -53,7 +53,7 @@ export const processEventsForDestination = async (utProps: TMsgAttrs) => {
       }
 
       case NfEvents.NEW_ORG_CREATED : {
-        createLinkedAccountForNewUser(utProps);
+        await createLinkedAccountForNewUser(utProps);
         break;
       }
 
@@ -63,7 +63,7 @@ export const processEventsForDestination = async (utProps: TMsgAttrs) => {
       }
 
       case NfEvents.NEW_USER_SIGNUP_WITH_SUBS: {
-        addContactToSmartLeads(props as Record<string,string>);
+        await addContactToSmartLeads(props as Record<string,string>);
         break;
       }
     
@@ -73,9 +73,7 @@ export const processEventsForDestination = async (utProps: TMsgAttrs) => {
   } catch (error) {
     console.log((error as Error).stack);
     captureException(error as Error);
-    if (error instanceof RetryableErr) {
-      throw error;
-    }
+    throw error;
   }
 };
 
@@ -109,7 +107,7 @@ const notifySlack = async (url: string | undefined, text: string) => {
     log.info('Notification sent');
     return;
   } 
-  log.info('Notification failed');
+  throw new Error(`Notification failed (HTTP ${resp.status})`);
 };
 
 

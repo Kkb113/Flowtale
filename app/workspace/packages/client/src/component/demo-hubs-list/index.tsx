@@ -16,7 +16,7 @@ interface Props {
   demoHubsList: P_RespDemoHub[];
   createNewDemoHub: (name: string) => Promise<P_RespDemoHub>;
   renameDemoHub: RenameDemoHubFn;
-  deleteDemoHub: (demoHubRid: string) => void;
+  deleteDemoHub: (demoHubRid: string) => Promise<void>;
   publishDemoHub: (demoHub: P_RespDemoHub) => Promise<boolean>,
   loadDemoHubConfig: (demoHub: P_RespDemoHub) => Promise<IDemoHubConfig>,
   navigateToDemoHub: (demoHubRid: string) => void

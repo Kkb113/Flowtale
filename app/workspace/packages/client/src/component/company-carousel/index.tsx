@@ -2,8 +2,10 @@ import React from 'react';
 import { HeartFilled } from '@ant-design/icons';
 import { companiesUsingFable } from './data';
 import * as Tags from './styled';
+import { isLocalDevelopment } from '../../local-development';
 
-function CompanyCarousel(): JSX.Element {
+function CompanyCarousel(): JSX.Element | null {
+  if (isLocalDevelopment) return null;
   return (
     <Tags.CompanyCon>
       <div style={{

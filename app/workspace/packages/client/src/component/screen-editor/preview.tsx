@@ -1,7 +1,10 @@
 import { JourneyData, ScreenData } from '@fable/common/dist/types';
 import React from 'react';
 import { ScreenType } from '@fable/common/dist/api-contract';
+import { isDraftAssetUrl } from '@fable/common/dist/draft-assets';
 import raiseDeferredError from '@fable/common/dist/deferred-error';
+import { PrivateImage } from './utils/private-image';
+import { PrivateCaptureAssets } from './utils/private-capture-assets';
 import { P_RespScreen } from '../../entity-processor';
 import { scrollIframeEls } from './scroll-util';
 import * as Tags from './preview-styled';
@@ -11,6 +14,7 @@ import { ANN_ZOOMED, FABLE_IFRAME_GENERIC_CLASSNAME, SCREEN_SIZE_MSG } from '../
 import LogoWatermark from '../watermark/logo-watermark';
 import { IframePos, EditItem, ScreenSizeData, Quadrant, QuadrantType, InternalEvents, Payload_Navigation } from '../../types';
 import { applyEditsToSerDom } from './utils/edits';
+import { applyPendingRedactions } from './utils/redaction';
 import { getCustomTopLeftAndScale, getScaleOfElement, MAX_ZOOM_SCALE, scaleRect } from '../../utils';
 import { OnNavigationEvent } from '../../container/player';
 import { Rect } from '../base/hightligher-base';
@@ -74,6 +78,7 @@ function previewShadowSizeExtenstion(shouldShowShadow: boolean): {shadowWidth: n
 
 interface IOwnState {
   renderComplete: boolean;
+  renderError?: string;
 }
 
 export default class ScreenPreview extends React.PureComponent<IOwnProps, IOwnState> {
@@ -98,6 +103,10 @@ export default class ScreenPreview extends React.PureComponent<IOwnProps, IOwnSt
   private assetLoadingPromises: Promise<unknown>[] = [];
 
   private frameLoadingPromises: Promise<unknown>[] = [];
+
+  private privateImage = new PrivateImage();
+
+  private privateCaptureAssets = new PrivateCaptureAssets();
 
   constructor(props: IOwnProps) {
     super(props);
@@ -140,7 +149,14 @@ export default class ScreenPreview extends React.PureComponent<IOwnProps, IOwnSt
       if (frameHtml && frameBody) {
         let screenData = this.props.screenData;
         if (this.props.screen.type === ScreenType.SerDom) {
-          screenData = applyEditsToSerDom(this.props.allEdits, this.props.screenData);
+          screenData = applyEditsToSerDom(this.props.allEdits, this.props.screenData, !this.props.playMode);
+          if (isDraftAssetUrl(this.props.screen.dataFileUri.href, process.env.REACT_APP_API_ENDPOINT)) {
+            screenData = await this.privateCaptureAssets.document(screenData);
+            if (!frame.isConnected) return;
+          }
+        } else if (isDraftAssetUrl(this.props.screen.dataFileUri.href, process.env.REACT_APP_API_ENDPOINT)) {
+          screenData = await this.privateImage.document(screenData, this.props.screen.rid);
+          if (!frame.isConnected) return;
         }
         deserFrame(
           screenData.docTree,
@@ -197,6 +213,8 @@ export default class ScreenPreview extends React.PureComponent<IOwnProps, IOwnSt
   }
 
   componentWillUnmount(): void {
+    this.privateImage.dispose();
+    this.privateCaptureAssets.dispose();
     this.removeListeners();
   }
 
@@ -259,7 +277,12 @@ export default class ScreenPreview extends React.PureComponent<IOwnProps, IOwnSt
 
     frame.onload = () => {
       const timer = setTimeout(async () => {
-        await this.deserDomIntoFrame(frame);
+        try {
+          await this.deserDomIntoFrame(frame);
+        } catch (error) {
+          if (frame.isConnected) this.setState({ renderError: 'The screen assets could not be loaded. Check your connection and retry.' });
+          return;
+        }
         /* requestAnimationFrame */setTimeout(() => {
           const doc = frame.contentDocument;
           const frameBody = doc?.body;
@@ -267,6 +290,7 @@ export default class ScreenPreview extends React.PureComponent<IOwnProps, IOwnSt
           Promise.all(this.assetLoadingPromises).then(() => {
             // create a elative container that would contain all the falbe related els
             if (frameBody) {
+              if (!this.props.playMode && doc) applyPendingRedactions(doc);
               let umbrellaDiv = getFableRtUmbrlDivWrapper(doc);
               if (!umbrellaDiv) {
                 umbrellaDiv = createFableRtUmbrlDivWrapper(doc);
@@ -664,6 +688,29 @@ export default class ScreenPreview extends React.PureComponent<IOwnProps, IOwnSt
     const props = this.props.screenData.isHTML4 ? {} : { srcDoc: IFRAME_DEFAULT_DOC };
     return (
       <>
+        {this.state.renderError && !this.props.hidden && (
+        <div role="alert" style={{ position: 'absolute', zIndex: 10 }}>
+          {this.state.renderError}
+          <button
+            type="button"
+            onClick={() => {
+              this.privateImage.dispose();
+              this.privateCaptureAssets.dispose();
+              this.privateImage = new PrivateImage();
+              this.privateCaptureAssets = new PrivateCaptureAssets();
+              this.frameLoadingPromises.length = 0;
+              this.assetLoadingPromises.length = 0;
+              this.setState({ renderError: undefined });
+              const frame = this.embedFrameRef.current;
+              if (frame) {
+                if (this.props.screenData.isHTML4) frame.src = `/aboutblankhtml4.html?retry=${Date.now()}`;
+                else frame.srcdoc = IFRAME_DEFAULT_DOC;
+              }
+            }}
+          >Retry screen
+          </button>
+        </div>
+        )}
         <div
           ref={this.frameWrapperRef}
           style={{
@@ -702,6 +749,8 @@ export default class ScreenPreview extends React.PureComponent<IOwnProps, IOwnSt
             }}
             heightOffset={this.props.heightOffset}
             {...props}
+            sandbox="allow-same-origin"
+            referrerPolicy="no-referrer"
           />
 
           {/*

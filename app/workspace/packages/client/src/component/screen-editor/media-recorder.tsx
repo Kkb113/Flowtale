@@ -1,17 +1,14 @@
 import React, { ReactElement, SetStateAction, useEffect, useRef, Dispatch, useState } from 'react';
-import { Tabs } from 'antd';
+import { Alert, Tabs } from 'antd';
 import { IAnnotationConfig, VideoAnnotationPositions } from '@fable/common/dist/types';
-import { captureException } from '@sentry/react';
 import { MediaType } from '@fable/common/dist/api-contract';
-import raiseDeferredError from '@fable/common/dist/deferred-error';
 import Button from '../button';
-import { uploadMediaToAws, transcodeVideo, transcodeAudio, uploadImgFileObjectToAws } from '../../upload-media-to-aws';
+import { transcodeVideo, transcodeAudio, uploadImgFileObjectToAws } from '../../upload-media-to-aws';
 import {
   updateAnnotationBoxSize,
   updateAnnotationPositioning,
   updateAnnotationVideo,
 } from '../annotation/annotation-config-utils';
-import { blobToUint8Array } from './utils/blob-to-uint8array';
 import { P_RespSubscription, P_RespTour } from '../../entity-processor';
 import * as Tags from './styled';
 import * as GTags from '../../common-styled';
@@ -19,6 +16,7 @@ import * as GTags from '../../common-styled';
 import AudioVisualizer from '../audio-visualizer';
 import Upgrade from '../upgrade';
 import { handleAddAnnotationAudio } from '../../utils';
+import { finishRecording, recordingMimeType } from './recorded-media';
 
 type Props = {
   tour: P_RespTour,
@@ -56,9 +54,6 @@ const initialState: MediaState = {
   isMediaReady: false,
   mediaRecorder: null,
 };
-
-const VIDEO_CODEC_OPTIONS = { mimeType: 'video/webm;codecs=h264' };
-const AUDIO_CODEC_OPTIONS = { mimeType: 'audio/webm; codecs=opus' };
 
 // videoReducer is local to this video recorder component, that's why it's placed here
 const mediaReducer = (state: MediaState, action: Action): MediaState => {
@@ -127,8 +122,8 @@ const getUserMediaContraints = (mediaType: AnnMediaType): MediaStreamConstraints
     return {
       ...baseMediaConstraints,
       video: {
-        width: { exact: 200 },
-        height: { exact: 300 },
+        width: { ideal: 200 },
+        height: { ideal: 300 },
         frameRate: { ideal: 12 },
       }
     };
@@ -142,14 +137,30 @@ function MediaRecorderModal(props: Props): ReactElement {
   const streamRef = useRef<MediaStream>();
   const recordedPartsRef = useRef<Blob[]>([]);
   const mediaRecorderRef = useRef<MediaRecorder>();
+  const recordedBlob = useRef<Blob>();
+  const previewUrl = useRef('');
+  const lifetime = useRef(new AbortController());
+  const saving = useRef(false);
+  const uploaded = useRef<{ blob: Blob; baseUrl: string; cdnUrl: string }>();
+  const retryFile = useRef<{ file: File; kind: AnnMediaType }>();
+  const [error, setError] = useState<string | null>(null);
   const [activeTabKey, setActiveTabKey] = useState<AnnMediaType>('video');
   const [state, dispatch] = React.useReducer(mediaReducer, initialState);
 
   useEffect(() => {
-    navigator.mediaDevices.getUserMedia(getUserMediaContraints(activeTabKey))
+    lifetime.current = new AbortController();
+    const signal = lifetime.current.signal;
+    dispatch({ type: 'RESET_STATE' });
+    setError(null);
+    if (!props.annotationFeatureAvailable.includes(activeTabKey)) return () => cleanup();
+    const request = navigator.mediaDevices?.getUserMedia
+      ? navigator.mediaDevices.getUserMedia(getUserMediaContraints(activeTabKey))
+      : Promise.reject(new Error('Recording is unavailable in this browser. Upload an existing recording.'));
+    request
       .then(stream => {
+        if (signal.aborted) { stream.getTracks().forEach(track => track.stop()); return; }
         streamRef.current = stream;
-        recorderRef.current!.srcObject = stream;
+        if (recorderRef.current) recorderRef.current.srcObject = stream;
         dispatch({
           type: 'SET_PERMISSION_GIVEN',
           payload: {
@@ -162,9 +173,8 @@ function MediaRecorderModal(props: Props): ReactElement {
             isMediaReady: true
           }
         });
-      }).catch(err => {
-        if (err.message === 'Permission denied') {
-          captureException('Camera & mic permission denied while recording video annotation');
+      }).catch(() => {
+        if (!signal.aborted) {
           dispatch({
             type: 'SET_PERMISSION_GIVEN',
             payload: {
@@ -177,17 +187,15 @@ function MediaRecorderModal(props: Props): ReactElement {
               isMediaReady: false
             }
           });
-        } else {
-          raiseDeferredError(err);
+          setError('Camera or microphone access is unavailable. Check browser permissions or upload an existing recording.');
         }
       });
     return () => { cleanup(); };
   }, [activeTabKey]);
 
   const cleanup = (): void => {
-    dispatch({ type: 'RESET_STATE' });
-
-    mediaRecorderRef.current?.stop();
+    lifetime.current.abort();
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') mediaRecorderRef.current.stop();
 
     recordedPartsRef.current = [];
 
@@ -196,9 +204,26 @@ function MediaRecorderModal(props: Props): ReactElement {
     });
 
     mediaRecorderRef.current = undefined;
+    streamRef.current = undefined;
+    recordedBlob.current = undefined;
+    uploaded.current = undefined;
+    retryFile.current = undefined;
+    saving.current = false;
+    if (previewUrl.current) URL.revokeObjectURL(previewUrl.current);
+    previewUrl.current = '';
   };
 
   const startRecording = (mediaType: AnnMediaType): void => {
+    if (saving.current || !streamRef.current || mediaRecorderRef.current?.state === 'recording') return;
+    setError(null);
+    let mediaRecorder: MediaRecorder;
+    try {
+      mediaRecorder = new MediaRecorder(streamRef.current, { mimeType: recordingMimeType(mediaType) });
+    } catch (failure) {
+      setError(failure instanceof Error ? failure.message : 'Recording could not start.');
+      return;
+    }
+    mediaRecorderRef.current = mediaRecorder;
     dispatch({
       type: 'SET_DONE_RECORDING',
       payload: {
@@ -214,32 +239,34 @@ function MediaRecorderModal(props: Props): ReactElement {
     });
 
     if (streamRef.current) {
-      const mediaRecorder = mediaRecorderRef.current = new MediaRecorder(
-        streamRef.current,
-        mediaType === 'audio' ? AUDIO_CODEC_OPTIONS : VIDEO_CODEC_OPTIONS
-      );
       dispatch({
         type: 'SET_MEDIA_RECORDER',
         payload: {
           mediaRecorder,
         }
       });
-      mediaRecorder.start(1);
       recordedPartsRef.current = [];
       mediaRecorder.ondataavailable = function (e) {
-        recordedPartsRef.current.push(e.data);
+        if (mediaRecorderRef.current === mediaRecorder && e.data.size) recordedPartsRef.current.push(e.data);
       };
+      mediaRecorder.onerror = () => {
+        if (mediaRecorderRef.current !== mediaRecorder || lifetime.current.signal.aborted) return;
+        setError('Recording was interrupted. Please record again or upload a file.');
+        dispatch({ type: 'SET_IS_RECORDING', payload: { isRecording: false } });
+      };
+      try { mediaRecorder.start(1000); } catch {
+        setError('Recording could not start. Please try again or upload a file.');
+        dispatch({ type: 'SET_IS_RECORDING', payload: { isRecording: false } });
+      }
     }
   };
 
-  const stopRecording = (mediaType: AnnMediaType): void => {
-    dispatch({
-      type: 'SET_DONE_RECORDING',
-      payload: {
-        doneRecording: true
-      }
-    });
-
+  const stopRecording = async (mediaType: AnnMediaType): Promise<void> => {
+    const recorder = mediaRecorderRef.current;
+    if (!recorder || recorder.state !== 'recording' || saving.current) return;
+    saving.current = true;
+    const signal = lifetime.current.signal;
+    dispatch({ type: 'START_SAVING' });
     dispatch({
       type: 'SET_IS_RECORDING',
       payload: {
@@ -247,20 +274,28 @@ function MediaRecorderModal(props: Props): ReactElement {
       }
     });
 
-    mediaRecorderRef.current!.stop();
-    const blob = new Blob(recordedPartsRef.current, {
-      type: mediaType === 'audio' ? AUDIO_CODEC_OPTIONS.mimeType : VIDEO_CODEC_OPTIONS.mimeType
-    });
-    const url = URL.createObjectURL(blob);
-    dispatch({
-      type: 'SET_RECORDED_MEDIA_URL',
-      payload: {
-        url
-      }
-    });
+    try {
+      const blob = await finishRecording(recorder, recordedPartsRef.current, signal);
+      if (signal.aborted) return;
+      recordedBlob.current = blob;
+      if (previewUrl.current) URL.revokeObjectURL(previewUrl.current);
+      previewUrl.current = URL.createObjectURL(blob);
+      dispatch({ type: 'SET_RECORDED_MEDIA_URL', payload: { url: previewUrl.current } });
+      dispatch({ type: 'SET_DONE_RECORDING', payload: { doneRecording: true } });
+    } catch (failure) {
+      if (!signal.aborted) setError(failure instanceof Error ? failure.message : 'Recording could not be finalized.');
+    } finally {
+      if (!signal.aborted) { saving.current = false; dispatch({ type: 'FINISH_SAVING' }); }
+    }
   };
 
   const restartRecording = (): void => {
+    if (saving.current) return;
+    if (previewUrl.current) URL.revokeObjectURL(previewUrl.current);
+    previewUrl.current = '';
+    recordedBlob.current = undefined;
+    uploaded.current = undefined;
+    setError(null);
     recordedPartsRef.current = [];
     dispatch({
       type: 'SET_IS_RECORDING',
@@ -292,7 +327,8 @@ function MediaRecorderModal(props: Props): ReactElement {
   };
 
   const transcodeVideoHandler = async (url: string, cdnUrl: string): Promise<void> => {
-    const [err, stream1, stream2] = await transcodeVideo(url, cdnUrl, props.tour.rid);
+    const [err, stream1, stream2] = await transcodeVideo(url, cdnUrl, props.tour.rid, lifetime.current.signal);
+    if (lifetime.current.signal.aborted) return;
     if (err || stream1.failureReason || stream2.failureReason) {
       throw new Error('Transcoding failed');
     }
@@ -328,7 +364,8 @@ function MediaRecorderModal(props: Props): ReactElement {
   };
 
   const transcodeAudioHandler = async (url: string, cdnUrl: string, type: 'audio/webm' | 'audio/mpeg'): Promise<void> => {
-    const [err, stream1, stream2] = await transcodeAudio(url, cdnUrl, props.tour.rid);
+    const [err, stream1, stream2] = await transcodeAudio(url, cdnUrl, props.tour.rid, lifetime.current.signal);
+    if (lifetime.current.signal.aborted) return;
 
     if (err || stream1.failureReason || stream2.failureReason) {
       throw new Error('Transcoding failed');
@@ -339,10 +376,10 @@ function MediaRecorderModal(props: Props): ReactElement {
 
     [stream1, stream2].forEach(stream => {
       if (stream.mediaType === MediaType.AUDIO_HLS) {
-        hlsAudio = stream.processedFilePath;
+        hlsAudio = stream.processedCdnPath;
       }
       if (stream.mediaType === MediaType.AUDIO_WEBM) {
-        webmAudio = stream.processedFilePath;
+        webmAudio = stream.processedCdnPath;
       }
     });
 
@@ -356,55 +393,54 @@ function MediaRecorderModal(props: Props): ReactElement {
   };
 
   const saveRecording = async (): Promise<void> => {
-    dispatch({
-      type: 'START_SAVING'
-    });
-
-    const webmBlob = new Blob(recordedPartsRef.current, {
-      type: activeTabKey === 'audio' ? AUDIO_CODEC_OPTIONS.mimeType : VIDEO_CODEC_OPTIONS.mimeType
-    });
-    const webm = await blobToUint8Array(webmBlob);
-    const webmUrl = await uploadMediaToAws(webm, activeTabKey === 'audio' ? 'audio/webm' : 'video/webm');
-    if (!webmUrl) return;
-
-    const baseUrl = webmUrl.baseUrl.split('?')[0];
-    if (activeTabKey === 'audio') {
-      await transcodeAudioHandler(baseUrl, webmUrl.cdnUrl, 'audio/webm');
-    } else {
-      await transcodeVideoHandler(baseUrl, webmUrl.cdnUrl);
-    }
+    if (recordedBlob.current) await saveMedia(recordedBlob.current, activeTabKey);
   };
 
   const handleUploadMediaOnClick = async (mediaFile: File, mediaType: AnnMediaType): Promise<void> => {
-    dispatch({
-      type: 'START_SAVING'
-    });
+    retryFile.current = { file: mediaFile, kind: mediaType };
+    await saveMedia(mediaFile, mediaType);
+  };
 
-    const mediaUrl = await uploadImgFileObjectToAws(mediaFile);
-    if (!mediaUrl) return;
-
-    const baseUrl = mediaUrl.baseUrl.split('?')[0];
-    if (mediaType === 'audio') {
-      await transcodeAudioHandler(baseUrl, mediaUrl.cdnUrl, 'audio/mpeg');
-    } else {
-      await transcodeVideoHandler(baseUrl, mediaUrl.cdnUrl);
+  const saveMedia = async (blob: Blob, kind: AnnMediaType): Promise<void> => {
+    if (saving.current || lifetime.current.signal.aborted) return;
+    const signal = lifetime.current.signal;
+    saving.current = true;
+    setError(null);
+    dispatch({ type: 'START_SAVING' });
+    try {
+      if (!blob.size || blob.size > 200 * 1024 * 1024) throw new Error('Choose a nonempty recording under 200 MB.');
+      let result = uploaded.current?.blob === blob ? uploaded.current : undefined;
+      if (!result) {
+        const upload = await uploadImgFileObjectToAws(new File([blob], 'recording', { type: blob.type }), signal);
+        if (!upload) throw new Error('The recording could not be uploaded.');
+        if (signal.aborted) return;
+        result = { blob, ...upload };
+        uploaded.current = result;
+      }
+      const url = result.baseUrl.split('?')[0];
+      if (kind === 'audio') {
+        await transcodeAudioHandler(
+          url,
+          result.cdnUrl,
+          blob.type.includes('webm') ? 'audio/webm' : 'audio/mpeg'
+        );
+      } else await transcodeVideoHandler(url, result.cdnUrl);
+    } catch (failure) {
+      if (!signal.aborted) setError(failure instanceof Error ? failure.message : 'The recording could not be saved.');
+    } finally {
+      if (!signal.aborted) { saving.current = false; dispatch({ type: 'FINISH_SAVING' }); }
     }
   };
 
   useEffect(() => {
     if (!state.doneRecording) {
-      recorderRef.current!.srcObject = streamRef.current!;
+      if (recorderRef.current) recorderRef.current.srcObject = streamRef.current || null;
     }
   }, [state.doneRecording]);
 
-  const closeRecorder = async (): Promise<void> => {
-    streamRef.current?.getTracks().forEach((track) => {
-      track.stop();
-    });
-    dispatch({
-      type: 'CLOSE_MEDIA_MODAL'
-    });
-    setTimeout(() => props.closeRecorder(), 1000);
+  const closeRecorder = (): void => {
+    cleanup();
+    props.closeRecorder();
   };
 
   const tabs = [
@@ -459,8 +495,23 @@ function MediaRecorderModal(props: Props): ReactElement {
         }}
       >Create video/audio guide
       </p>
+      {error && <Alert
+        type="error"
+        showIcon
+        message="Media could not be saved"
+        description={error}
+        action={retryFile.current && !state.saving ? (
+          <Button onClick={() => {
+            const retry = retryFile.current;
+            if (retry) saveMedia(retry.file, retry.kind);
+          }}
+          >
+            Retry
+          </Button>
+        ) : undefined}
+      />}
       <Tabs
-        onTabClick={(activeKey) => setActiveTabKey(activeKey as AnnMediaType)}
+        onTabClick={(activeKey) => { if (!saving.current && !state.isRecording) setActiveTabKey(activeKey as AnnMediaType); }}
         activeKey={activeTabKey}
         destroyInactiveTabPane
         type="line"
@@ -703,8 +754,10 @@ function UploadMediaButton(props: UploadMediaButtonProps): JSX.Element {
         required
         onChange={async (e) => {
           if (e.target.files && e.target.files.length) {
-            await props.handleUploadMediaOnClick(e.target.files[0], props.annMediaType);
-            setSelectedFileName(e.target.files[0].name);
+            const file = e.target.files[0];
+            e.target.value = '';
+            setSelectedFileName(file.name);
+            await props.handleUploadMediaOnClick(file, props.annMediaType);
           } else {
             setSelectedFileName('');
           }

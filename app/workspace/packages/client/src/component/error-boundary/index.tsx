@@ -1,43 +1,27 @@
-import React from 'react';
-import { Outlet, useNavigate, useRouteError } from 'react-router-dom';
-import raiseDeferredError from '@fable/common/dist/deferred-error';
-import InfoCon from '../info-con';
+import React, { useEffect } from 'react';
+import { useRouteError } from 'react-router-dom';
+import { sentryCaptureException } from '@fable/common/dist/sentry';
 
 function ErrorBoundary(): JSX.Element {
-  const navigate = useNavigate();
   const err = useRouteError();
-
-  raiseDeferredError(err as Error);
-  if (err && (err as Error).name === 'ChunkLoadError') {
-    return (
-      <div
-        style={{
-          width: '100vw',
-          height: '100vh',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          flexDirection: 'column'
-        }}
-      >
-        <InfoCon
-          heading=""
-          body={
-            <> Something wrong with automatic redirection. <br />
-              Please click the button below to go to Fable.
-            </>
-        }
-          btns={[{
-            type: 'primary',
-            text: 'Reload',
-            linkTo: '/demos'
-          }]}
-        />
+  useEffect(() => {
+    // Report the original stack once; rethrowing during render causes another
+    // uncaught error and previously left all non-chunk failures on a blank page.
+    try {
+      sentryCaptureException(err instanceof Error ? err : new Error('Page loading failed'));
+    } catch { /* Diagnostics must not break the recovery controls. */ }
+  }, [err]);
+  return (
+    <main style={{ padding: 32, maxWidth: 640, margin: 'auto' }}>
+      <div role="alert">
+        <h1>This page could not be loaded</h1>
+        <p>Retry loading the page, or return to your demos.</p>
       </div>
-    );
-  }
-
-  return <Outlet />;
+      <button type="button" onClick={() => window.location.reload()}>Retry loading</button>
+      {' '}
+      <a href="/demos">Back to demos</a>
+    </main>
+  );
 }
 
 export default ErrorBoundary;

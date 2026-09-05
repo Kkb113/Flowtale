@@ -16,8 +16,10 @@ import {
   IGlobalConfig,
 } from '@fable/common/dist/types';
 import api from '@fable/common/dist/api';
+import { draftAssetUrl } from '@fable/common/dist/draft-assets';
 import {
   ApiResp,
+  ResponseStatus,
   ReqCopyScreen,
   ReqNewScreen,
   ReqNewTour,
@@ -65,6 +67,8 @@ import { post_process_demo } from '@fable/common/dist/llm-fn-schema/post_process
 import { create_guides_step_by_step } from '@fable/common/dist/llm-fn-schema/create_guides_step_by_step';
 import { create_guides_marketing } from '@fable/common/dist/llm-fn-schema/create_guides_marketing';
 import { demo_metadata } from '@fable/common/dist/llm-fn-schema/demo_metadata';
+import { CreationJournal } from './creation-journal';
+import { fetchAiImage } from '../../ai-image-file';
 import { isValidThemeColor } from './theme-colors';
 import { DemoCreationMode, getCreationModeDefaults } from './creation-mode';
 import {
@@ -87,9 +91,7 @@ import {
 import { P_RespSubscription, P_RespTour, getDefaultThumbnailHash } from '../../entity-processor';
 import { createAnnotationHotspot, extractTextFromHTMLString, getColorContrast, getSerNodesElPathFromFids, handleLlmApi, handleRaiseDeferredErrorWithAnnonymousId, isActiveBusinessPlan } from '../../utils';
 import {
-  uploadImgFileObjectToAws,
   uploadImageAsBinary,
-  uploadImageDataToAws,
   uploadMarkedImageToAws
 } from '../../upload-media-to-aws';
 import { DemoState, Vpd } from '../../types';
@@ -113,7 +115,8 @@ export function getNodeFromDocTree(docTree: SerNode, nodeName: string): SerNode 
   return null;
 }
 
-export async function saveAsTour(
+async function buildSaveAsTour(
+  journal: CreationJournal,
   screens: ScreenInfoWithAI[],
   existingTour: P_RespTour | null,
   globalOpts: IGlobalConfig,
@@ -158,7 +161,8 @@ export async function saveAsTour(
   // for save in existing tour we need to show overlay
   annStyle.showOverlay = getCreationModeDefaults(creationMode).showOverlay;
 
-  const { tourDataFile, tourRid } = await addAnnotationConfigs(
+  const { tourDataFile, tourRid, expectedRevision } = await journal.checkpoint('document', () => addAnnotationConfigs(
+    journal,
     screens,
     existingTour,
     tourName,
@@ -169,15 +173,52 @@ export async function saveAsTour(
     anonymousDemoId,
     productDetails,
     demoObjective
-  );
-  const res = await saveTour(tourRid, tourDataFile);
+  ));
+  const res = await saveTour(journal, tourRid, tourDataFile, expectedRevision);
 
   return res;
+}
+
+type CreationIntent = Parameters<typeof buildSaveAsTour> extends [CreationJournal, ...infer Args] ? Args : never;
+
+export async function saveAsTour(journal: CreationJournal, ...args: CreationIntent): Promise<ApiResp<RespDemoEntity>> {
+  const intent = await journal.checkpoint('intent', async () => args);
+  return journal.complete(await buildSaveAsTour(journal, ...intent));
+}
+
+export async function resumeCreation(journal: CreationJournal): Promise<ApiResp<RespDemoEntity> | null> {
+  const completed = await journal.read<ApiResp<RespDemoEntity>>('completed');
+  if (completed) return journal.complete(completed);
+  const intent = await journal.read<CreationIntent>('intent');
+  return intent ? journal.complete(await buildSaveAsTour(journal, ...intent)) : null;
+}
+
+export async function reviewAppendDestination(journal: CreationJournal): Promise<P_RespTour> {
+  const intent = await journal.read<CreationIntent>('intent');
+  const previous = intent?.[1];
+  if (!previous) throw new Error('This recording has no existing destination to update. Retry the original creation.');
+  const response = await api<null, ApiResp<RespDemoEntity[]>>('/tours', { auth: true });
+  const current = response.data.find(tour => tour.id === previous.id);
+  if (!current) throw new Error('The destination was deleted or is no longer accessible. Your recording is retained.');
+  return { ...previous,
+    ...current,
+    updatedAt: new Date(current.updatedAt),
+    dataFileUri: draftAssetUrl('tour', current.rid, 'index.json') } as P_RespTour;
+}
+
+export async function acceptAppendDestination(journal: CreationJournal, destination: P_RespTour): Promise<void> {
+  const intent = await journal.read<CreationIntent>('intent');
+  if (!intent?.[1] || intent[1].id !== destination.id || !Number.isFinite(new Date(destination.updatedAt).getTime())) {
+    throw new Error('The reviewed destination does not match this recording.');
+  }
+  intent[1] = destination;
+  await journal.reviewAppend(intent);
 }
 
 // --- tour creation util ---
 
 async function createNewTour(
+  journal: CreationJournal,
   tourName: string,
   tourDescription: string,
   vpd: null | Vpd,
@@ -208,19 +249,18 @@ async function createNewTour(
     info.thumbnail = thumbnail;
   }
 
-  const { data } = await api<ReqNewTour, ApiResp<RespDemoEntity>>('/newtour', {
-    auth: true,
-    body: {
-      name: tourName,
-      description: tourDescription,
-      settings: tsettings,
-      info
-    },
+  const { data } = await journal.request<ReqNewTour, ApiResp<RespDemoEntity>>('tour', '/newtour', {
+    name: tourName,
+    description: tourDescription,
+    settings: tsettings,
+    info
   });
   return data;
 }
 
 async function addScreenToTour(
+  journal: CreationJournal,
+  step: number,
   tourRid: string,
   screenId: number,
   screenType: ScreenType,
@@ -228,20 +268,14 @@ async function addScreenToTour(
 ): Promise<RespScreen> {
   let screenResp: ApiResp<RespScreen>;
   if (screenType === ScreenType.Img) {
-    screenResp = await api<ReqScreenTour, ApiResp<RespScreen>>('/astsrntotour', {
-      method: 'POST',
-      body: {
-        screenRid,
-        tourRid,
-      },
+    screenResp = await journal.request<ReqScreenTour, ApiResp<RespScreen>>(`assign-${step}`, '/astsrntotour', {
+      screenRid,
+      tourRid,
     });
   } else {
-    screenResp = await api<ReqCopyScreen, ApiResp<RespScreen>>('/copyscreen', {
-      auth: true,
-      body: {
-        parentId: screenId,
-        tourRid,
-      },
+    screenResp = await journal.request<ReqCopyScreen, ApiResp<RespScreen>>(`copy-${step}`, '/copyscreen', {
+      parentId: screenId,
+      tourRid,
     });
   }
 
@@ -249,6 +283,7 @@ async function addScreenToTour(
 }
 
 async function addAnnotationConfigs(
+  journal: CreationJournal,
   screenInfo: Array<ScreenInfoWithAI>,
   existingTour: P_RespTour | null,
   tourName: string,
@@ -259,9 +294,11 @@ async function addAnnotationConfigs(
   anonymousDemoId: string,
   productDetails: string,
   demoObjective: string,
-): Promise<{ tourDataFile: TourData, tourRid: string }> {
+): Promise<{ tourDataFile: TourData, tourRid: string, expectedRevision: number }> {
   let tourDataFile: TourData;
   let tourRid: string;
+  let expectedRevision: number;
+  const recordedScreenCount = screenInfo.length;
 
   screenInfo = screenInfo.filter((screen, idx) => {
     if (screen.aiAnnotationData) {
@@ -270,9 +307,15 @@ async function addAnnotationConfigs(
     return !screen.skipped;
   });
 
+  if (!screenInfo.length && (!existingTour || recordedScreenCount > 0)) {
+    throw new Error('No usable screens remain in this recording. Your capture has been retained.');
+  }
+
   if (existingTour) {
     tourRid = existingTour.rid;
-    const rawTourData = await api<null, TourData>(existingTour.dataFileUri.href);
+    expectedRevision = new Date(existingTour.updatedAt).getTime();
+    if (!Number.isFinite(expectedRevision)) throw new Error('Reload the destination demo before adding this recording.');
+    const rawTourData = await api<null, TourData>(typeof existingTour.dataFileUri === 'string' ? existingTour.dataFileUri : existingTour.dataFileUri.href);
     tourDataFile = normalizeTourDataDocument(rawTourData, {
       opts: getDefaultTourOpts(globalOpts),
       journey: getSampleJourneyData(globalOpts),
@@ -287,6 +330,7 @@ async function addAnnotationConfigs(
       thumbnail = screenInfo[0].info.thumbnail;
     }
     const tourData = await createNewTour(
+      journal,
       tourName,
       tourDescription,
       settings,
@@ -296,6 +340,8 @@ async function addAnnotationConfigs(
       demoObjective
     );
     tourRid = tourData.rid;
+    expectedRevision = new Date(tourData.updatedAt).getTime();
+    if (!Number.isFinite(expectedRevision)) throw new Error('The new demo did not return a valid save revision.');
     tourDataFile = createEmptyTourDataFile(globalOpts);
   }
 
@@ -323,7 +369,7 @@ async function addAnnotationConfigs(
       const lastScreenPromise = screensInTourPromises[screensInTourPromises.length - 1];
       screensInTourPromises.push(lastScreenPromise);
     } else {
-      const newScreen = addScreenToTour(tourRid, screen.id, screen.type, screen.rid);
+      const newScreen = addScreenToTour(journal, i, tourRid, screen.id, screen.type, screen.rid);
       screensInTourPromises.push(newScreen);
     }
 
@@ -377,7 +423,7 @@ async function addAnnotationConfigs(
 
   const screensInTour: Array<RespScreen> = await Promise.all(screensInTourPromises);
 
-  if (tourDataFile.opts.main === '') {
+  if (tourDataFile.opts.main === '' && screensInTour.length > 0) {
     tourDataFile.opts.main = `${screensInTour[0].id}/${annConfigs[0].refId}`;
   }
 
@@ -413,7 +459,8 @@ async function addAnnotationConfigs(
       const prevBtn = annotationConfig.buttons.filter(btn => btn.type === 'prev')[0];
 
       if (isModuleMain) {
-        nextBtn.hotspot = createAnnotationHotspot(screensInTour[i + 1].id, annConfigs[i + 1].refId);
+        nextBtn.hotspot = i + 1 < screensInTour.length
+          ? createAnnotationHotspot(screensInTour[i + 1].id, annConfigs[i + 1].refId) : null;
         // current ann won't have prev
         // previous ann won't have next
         if (i > 0) {
@@ -463,16 +510,14 @@ async function addAnnotationConfigs(
     }
   }
 
-  return { tourDataFile, tourRid };
+  return { tourDataFile, tourRid, expectedRevision };
 }
 
-async function saveTour(rid: string, tourDataFile: TourData): Promise<ApiResp<RespDemoEntity>> {
-  const tourResp = await api<ReqRecordEdit, ApiResp<RespDemoEntity>>('/recordtredit', {
-    auth: true,
-    body: {
-      rid,
-      editData: JSON.stringify(tourDataFile),
-    },
+async function saveTour(journal: CreationJournal, rid: string, tourDataFile: TourData, expectedRevision: number): Promise<ApiResp<RespDemoEntity>> {
+  const tourResp = await journal.request<ReqRecordEdit, ApiResp<RespDemoEntity>>('final-save', '/recordtredit', {
+    rid,
+    editData: JSON.stringify(tourDataFile),
+    expectedRevision,
   });
   return tourResp;
 }
@@ -528,19 +573,11 @@ export const handleAssetOperation = async (
     try {
       if (operation.type === 'base64') {
         try {
-          const binaryData = atob(operation.node.props.base64Img!);
-          const arrayBuffer = new ArrayBuffer(binaryData.length);
-          const uint8Array = new Uint8Array(arrayBuffer);
-
-          for (let i = 0; i < binaryData.length; i++) {
-            uint8Array[i] = binaryData.charCodeAt(i);
-          }
-
-          const blob = new Blob([uint8Array]);
-          const file = new File([blob], 'image.png', { type: 'image/png' });
-          const url = await uploadImgFileObjectToAws(file);
-
-          operation.node.attrs[operation.attr!] = url?.cdnUrl || '';
+          const encoded = operation.node.props.base64Img!;
+          // The capture already owns these bytes. Keep them inside its private document
+          // so publication redaction cannot leave a separately downloadable original.
+          atob(encoded);
+          operation.node.attrs[operation.attr!] = `data:image/png;base64,${encoded}`;
           operation.node.props.base64Img = '';
         } catch (e) {
           raiseDeferredError(e as Error);
@@ -696,15 +733,7 @@ export function processScreen(
   for (const frame of frames) {
     if (frame.type === 'thumbnail') {
       imageData = frame.data as string;
-      try {
-        frameThumbnailPromise.push(uploadImageDataToAws(imageData, 'image/png').then(t => t?.cdnUrl || ''));
-
-        // const imageName = `un_marked_image_${id}.jpeg`;
-        // const file = new File([imageData], `temp${Math.random()}`, { type: 'image/jpeg' });
-        // frameThumbnailPromise.push(uploadMarkedImageToAws('image/jpeg', anonymousDemoId, imageName, file));
-      } catch (error) {
-        console.error('Failed to upload thumbnail to S3:', error);
-      }
+      frameThumbnailPromise.push(Promise.resolve(imageData));
       continue;
     } else if (frame.type !== 'serdom') {
       continue;
@@ -731,7 +760,7 @@ export function processScreen(
 
   if (!(mainFrame && mainFrame.data)) {
     isMainFrameFound = false;
-    sentryCaptureExceptionWithData('Main frame not found, this should never happen', frames);
+    reportCaptureProblem('Main frame not found, this should never happen');
   }
 
   let elPath = '';
@@ -782,7 +811,7 @@ export function processScreen(
         if (!subFrame) {
           console.warn('Node', node);
           raiseDeferredError(new Error(`No sub frame present for node ^^^. src=${node.attrs.src}`));
-          sentryCaptureExceptionWithData(`No sub frame present for node ^^^. src=${node.attrs.src}`, frames);
+          reportCaptureProblem('A captured subframe is unavailable');
         } else if (processedFrames.has(subFrame.frameId)) {
           raiseDeferredError(new Error(`Circular reference for frame. ${subFrame.frameId}`));
         } else {
@@ -945,6 +974,8 @@ export interface FrameProcessResult {
 }
 
 export async function processNewScreenApiCalls(
+  journal: CreationJournal,
+  step: number,
   frames: Array<FrameDataToBeProcessed>,
   mainFrame: FrameDataToBeProcessed | undefined,
   imageData: string,
@@ -973,74 +1004,65 @@ export async function processNewScreenApiCalls(
         width: mainFrameData.rect.width,
       };
 
-      const resp = await api<ReqNewScreen, ApiResp<RespScreen>>('/newscreen', {
-        method: 'POST',
-        body: {
-          name: (mainFrameData.title || '').substring(0, 48),
-          url: mainFrameData.frameUrl,
-          thumbnail: imageData,
-          body: JSON.stringify(screenBody),
-          favIcon: mainFrame.iconPath,
-          type: ScreenType.SerDom,
-        },
+      const resp = await journal.request<ReqNewScreen, ApiResp<RespScreen>>(`source-${step}`, '/newscreen', {
+        name: (mainFrameData.title || '').substring(0, 48),
+        url: mainFrameData.frameUrl,
+        thumbnail: imageData,
+        body: JSON.stringify(screenBody),
+        favIcon: mainFrame.iconPath,
+        type: ScreenType.SerDom,
       });
+      if (resp.status === ResponseStatus.Failure || !resp.data?.id) {
+        throw new Error('The screen was not saved.');
+      }
       data = resp.data;
     } catch (e) {
-      raiseDeferredError(e as Error);
-      // eslint-disable-next-line max-len
-      sentryCaptureExceptionWithData('Error while processing screens data, will replace serdom screen with image screen', frames);
-      if (!shouldReplaceWithImgScreen) {
-        // in this case the process call is successful but for some reason the screen has not been created
-        return { data: null, elPath: '', replacedWithImgScreen: false, skipped: true, vpd: null };
-      }
+      reportCaptureProblem('Captured screen persistence failed; creation paused with the recording retained.');
+      throw new Error('A captured screen could not be saved. Your recording has been retained in this browser.');
     }
   } else if (!imageData) {
-    sentryCaptureExceptionWithData('Screen skipped, could not find image data when main frame was not found', frames);
-    return { data: null, elPath: '', replacedWithImgScreen: false, skipped: true, vpd: null };
+    reportCaptureProblem('Captured screen has neither a document nor an image');
+    throw new Error('A captured screen is missing its document and image. Your recording has been retained.');
   }
 
   if (shouldReplaceWithImgScreen && imageData) {
     try {
       const screenImgFile = dataURLtoFile(imageData, 'img.png');
-      const resp = await api<ReqNewScreen, ApiResp<RespScreen>>('/newscreen', {
-        method: 'POST',
-        body: {
-          name: 'Untitled',
-          type: ScreenType.Img,
-          body: JSON.stringify(getImgScreenData()),
-          contentType: screenImgFile.type
-        },
+      const resp = await journal.request<ReqNewScreen, ApiResp<RespScreen>>(`source-${step}`, '/newscreen', {
+        name: 'Untitled',
+        type: ScreenType.Img,
+        body: JSON.stringify(getImgScreenData()),
+        contentType: screenImgFile.type
       });
-
+      if (resp.status === ResponseStatus.Failure || !resp.data?.id || !resp.data.uploadUrl) {
+        throw new Error('The image screen upload could not be prepared.');
+      }
       data = resp.data;
       await uploadImageAsBinary(screenImgFile, {
         baseUrl: data.uploadUrl!,
         cdnUrl: data.uploadUrl!.split('?')[0],
       });
-      await api<ReqThumbnailCreation, ApiResp<RespScreen>>('/genthumb', {
-        method: 'POST',
-        body: {
-          screenRid: data.rid
-        },
+      const thumbnail = await journal.request<ReqThumbnailCreation, ApiResp<RespScreen>>(`thumbnail-${step}`, '/genthumb', {
+        screenRid: data.rid
       });
+      if (thumbnail.status === ResponseStatus.Failure || !thumbnail.data?.id) {
+        throw new Error('The image screen thumbnail could not be saved.');
+      }
+      data = thumbnail.data;
       elPath = '$';
       replacedWithImgScreen = true;
-      sentryCaptureExceptionWithData('Screen replaced with image screen.', frames);
+      reportCaptureProblem('Screen replaced with image screen.');
     } catch (e) {
-      raiseDeferredError(e as Error);
-      sentryCaptureExceptionWithData('Screen skipped, could not replace with image screen', frames);
-      return { data: null, elPath: '', replacedWithImgScreen: false, skipped: true, vpd: null };
+      reportCaptureProblem('Image screen persistence failed; creation paused with the recording retained.');
+      throw new Error('An image screen could not be saved. Your recording has been retained in this browser.');
     }
   }
   return { data, elPath, replacedWithImgScreen, skipped: false, vpd };
 }
 
-function sentryCaptureExceptionWithData(errStr: string, results: Array<FrameDataToBeProcessed>): void {
-  sentryCaptureException(
-    new Error(errStr),
-    JSON.stringify(results),
-    'screendata.txt'
-  );
+function reportCaptureProblem(message: string): void {
+  // Captured documents and asset URLs can contain private customer content.
+  sentryCaptureException(new Error(message));
 }
 
 function traverseTreeByElPath(node: SerNode, path: number[]): AiDxDy {
@@ -1412,17 +1434,13 @@ export const getThemeData = async (
   try {
     if (imagesUrl.length <= 0) throw new Error('Images not found');
     const imageUrl = imagesUrl[Math.floor(imagesUrl.length / 2)];
-    // imageUrl needs to be from private bucket pvt so upload it and use that url.
-    // ref on query parameters: https://stackoverflow.com/a/55265139
-    const response = await fetch(`${imageUrl}?x-request=xhr`);
-    const blob = await response.blob();
-    const imageName = `unmarked_image_${anonymousDemoId}.jpeg`;
-    const file = new File([blob], `temp${Math.random()}`, { type: 'image/jpeg' });
-    const pvtImageUrl = await uploadMarkedImageToAws('image/jpeg', anonymousDemoId, imageName, file);
+    const file = await fetchAiImage(imageUrl);
+    const imageName = `unmarked_image_${anonymousDemoId}.${file.type === 'image/png' ? 'png' : 'jpeg'}`;
+    const pvtImageUrl = await uploadMarkedImageToAws(file.type, anonymousDemoId, imageName, file);
 
     const refs: RefForMMV[] = [
       { id: 1, url: removeBaseUrl(THEME_BASE_IMAGE_URL) },
-      { id: 2, url: removeBaseUrl(pvtImageUrl), type: 'image/jpeg' }
+      { id: 2, url: removeBaseUrl(pvtImageUrl), type: file.type as 'image/png' | 'image/jpeg' }
     ];
 
     const payload: ThemeForGuideV1 = {
@@ -1458,6 +1476,7 @@ export const getThemeData = async (
 const defaultCategory = 'marketing';
 
 const removeBaseUrl = (url:string): string => {
+  if (!url.startsWith('https://')) return url;
   const parsedUrl = new URL(url);
   return parsedUrl.pathname.substring(1);
 };
@@ -1715,18 +1734,7 @@ export const getElpathFromCandidate = (
     if (index < 0 || index > ctx.candidates.length - 1) return currElpath;
     return ctx.candidates[index].elPath;
   } catch (err) {
-    const sentryData = {
-      candidateArr: ctx?.candidates,
-      aiData: currAiData,
-      anonymousDemoId,
-      index
-    };
-
-    sentryCaptureException(
-      new Error('Failed to get elPath from candidate for anonymousDemoId '),
-      JSON.stringify(sentryData),
-      'elPathFromCandidate.txt'
-    );
+    sentryCaptureException(new Error('Failed to resolve an AI annotation target'));
     return currElpath;
   }
 };

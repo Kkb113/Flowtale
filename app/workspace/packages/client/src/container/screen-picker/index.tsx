@@ -321,7 +321,8 @@ class ScreenPicker extends React.PureComponent<IProps, IOwnStateProps> {
   duplicateScreenToTour = (screen: P_RespScreen): void => {
     let parentScreen: P_RespScreen = screen;
     if (screen.type === ScreenType.SerDom) {
-      parentScreen = this.props.rootScreens.find(srn => srn.id === screen.parentScreenId)!;
+      parentScreen = this.props.rootScreens.find(srn => srn.id === screen.parentScreenId
+        || srn.id === screen.id || srn.related.some(related => related.id === screen.id)) || screen;
     }
     this.handleAddScreenNotPartOfTour(parentScreen);
   };
@@ -346,7 +347,7 @@ class ScreenPicker extends React.PureComponent<IProps, IOwnStateProps> {
         <Tags.ScreenPickerCon>
           {/* <Tags.PolkaDotGridBg /> */}
           {this.props.showCloseButton
-          && <Tags.CloseIcon alt="" src={CloseIcon} onClick={this.props.hideScreenPicker} />}
+          && <Tags.CloseIcon alt="Close screen picker" src={CloseIcon} onClick={this.props.hideScreenPicker} />}
           <Tags.FableLogo alt="" src={FableLogo} />
           {!this.props.screenLoadingFinished && <Loader width="100px" txtBefore="Loading all screens" />}
           {this.props.screenLoadingFinished && (

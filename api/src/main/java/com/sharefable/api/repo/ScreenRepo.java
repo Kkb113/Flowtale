@@ -18,10 +18,15 @@ public interface ScreenRepo extends CrudRepository<Screen, Long> {
   List<Screen> findAllByBelongsToOrgOrderByUpdatedAtDesc(Long belongsToOrgId);
 
   Optional<Screen> findByRid(String rid);
+  boolean existsByThumbnailAndBelongsToOrg(String thumbnail, Long belongsToOrg);
 
   @Lock(LockModeType.PESSIMISTIC_WRITE)
   @Query("SELECT s FROM Screen s WHERE s.rid = :rid")
   Optional<Screen> findByRidForUpdate(@Param("rid") String rid);
+
+  @Lock(LockModeType.PESSIMISTIC_WRITE)
+  @Query("SELECT s FROM Screen s WHERE s.id = :id")
+  Optional<Screen> findByIdForUpdate(@Param("id") Long id);
 
   List<Screen> findAllByIdIn(Set<Long> id);
 }

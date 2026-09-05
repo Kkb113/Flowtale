@@ -24,6 +24,7 @@ export default function Button({
   borderRadius = size === 'medium' ? 24 : 60,
   ...rest
 }: Props): JSX.Element {
+  const renderedIcon = icon && children ? <span aria-hidden="true" style={{ display: 'contents' }}>{icon}</span> : icon;
   return (
     <Tags.ButtonCon
       className="typ-btn"
@@ -37,13 +38,13 @@ export default function Button({
     >
       {iconPlacement === 'left' ? (
         <>
-          {icon}
+          {renderedIcon}
           {children}
         </>
       ) : (
         <>
           {children}
-          {icon}
+          {renderedIcon}
         </>
       )}
     </Tags.ButtonCon>

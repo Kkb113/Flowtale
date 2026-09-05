@@ -17,7 +17,7 @@ import { amplitudeDemoHubEditorOpened,
 interface Props {
   demoHub: P_RespDemoHub;
   renameDemoHub: RenameDemoHubFn;
-  deleteDemoHub: (demoHubRid: string) => void;
+  deleteDemoHub: (demoHubRid: string) => Promise<void>;
   publishDemoHub: (demoHub: P_RespDemoHub) => Promise<boolean>;
   loadDemoHubConfig: (demoHub: P_RespDemoHub) => Promise<IDemoHubConfig>;
 }
@@ -81,7 +81,7 @@ function DemoCard(props : Props) : JSX.Element {
                 </span>
               </Tags.EmbedBtn>
             </Tooltip>
-            <DemoOptionsMenu changeModalState={setEditDemoModalState} />
+            <DemoOptionsMenu name={props.demoHub.displayName} changeModalState={setEditDemoModalState} />
           </div>
         </div>
       </div>

@@ -5,7 +5,8 @@ import {
 } from '@fable/common/dist/api-contract';
 import { CmnEvtProp } from '@fable/common/dist/types';
 import { getDisplayableTime } from '@fable/common/dist/utils';
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
+import { Alert } from 'antd';
 import { AMPLITUDE_EVENTS } from '../../amplitude/events';
 import { OurLink } from '../../common-styled';
 import { OnboardingSteps } from '../../container/user-onboarding';
@@ -27,31 +28,53 @@ export default function OrgCreate(props: Props): JSX.Element {
   const [isJoiningOrg, setIsJoiningOrg] = useState(false);
   const [selectedOrgId, setSelectedOrgRid] = useState<number>();
   const [showCreateNewOrgForm, setShowCreateNewOrgForm] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const busy = useRef(false);
+  const mounted = useRef(false);
 
   useEffect(() => {
-    if (showCreateNewOrgForm) {
-      setTimeout(() => {
+    mounted.current = true;
+    return () => { mounted.current = false; };
+  }, []);
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      if (showCreateNewOrgForm) {
         props.orgCreateInputRef.current?.focus();
-      }, 100);
-    }
-  }, [showCreateNewOrgForm]);
+      }
+    }, 100);
+    return () => clearTimeout(timer);
+  }, [showCreateNewOrgForm, props.orgCreateInputRef]);
 
   const handleJoinClick = async (orgId: number): Promise<void> => {
+    if (busy.current) return;
+    busy.current = true;
+    setError(null);
     setSelectedOrgRid(orgId);
     setIsJoiningOrg(true);
-
-    const org = await props.assignOrgToUser(orgId);
-
-    traceEvent(AMPLITUDE_EVENTS.USER_ORG_ASSIGN, {
-      org_name: orgName,
-      type: 'join_existing'
-    }, [CmnEvtProp.EMAIL, CmnEvtProp.FIRST_NAME, CmnEvtProp.LAST_NAME]);
-
-    props.onSelect(org);
+    try {
+      const org = await props.assignOrgToUser(orgId);
+      traceEvent(AMPLITUDE_EVENTS.USER_ORG_ASSIGN, {
+        org_name: org.displayName,
+        type: 'join_existing'
+      }, [CmnEvtProp.EMAIL, CmnEvtProp.FIRST_NAME, CmnEvtProp.LAST_NAME]);
+      if (mounted.current) props.onSelect(org);
+    } catch (failure) {
+      if (mounted.current) setError(failure instanceof Error ? failure.message : 'The workspace could not be opened.');
+    } finally {
+      busy.current = false;
+      if (mounted.current) {
+        setIsJoiningOrg(false);
+        setSelectedOrgRid(undefined);
+      }
+    }
   };
 
   const handleSubmit = async (e: React.FormEvent<HTMLFormElement>): Promise<void> => {
     e.preventDefault();
+    if (busy.current || !orgName.trim()) return;
+    busy.current = true;
+    setError(null);
     setIsLoading(true);
 
     traceEvent(AMPLITUDE_EVENTS.USER_ORG_ASSIGN, {
@@ -59,9 +82,15 @@ export default function OrgCreate(props: Props): JSX.Element {
       type: 'create_new'
     }, [CmnEvtProp.EMAIL, CmnEvtProp.FIRST_NAME, CmnEvtProp.LAST_NAME]);
 
-    const org = await props.createNewOrg(orgName);
-    setIsLoading(false);
-    props.onSelect(org);
+    try {
+      const org = await props.createNewOrg(orgName.trim());
+      if (mounted.current) props.onSelect(org);
+    } catch (failure) {
+      if (mounted.current) setError(failure instanceof Error ? failure.message : 'The workspace could not be created.');
+    } finally {
+      busy.current = false;
+      if (mounted.current) setIsLoading(false);
+    }
   };
 
   if (!props.userOrgs) return <div />;
@@ -80,6 +109,7 @@ export default function OrgCreate(props: Props): JSX.Element {
         opacity: isJoiningOrg ? 0.65 : 1
       }}
     >
+      {error && <Alert type="error" showIcon message="Workspace setup failed" description={error} />}
       <div
         className="typ-h1"
         style={{
@@ -117,7 +147,17 @@ export default function OrgCreate(props: Props): JSX.Element {
             {props.userOrgs.map(org => (
               <OrgItem
                 key={org.rid}
+                role="button"
+                tabIndex={isJoiningOrg || isLoading ? -1 : 0}
+                aria-label={`Open ${org.displayName}`}
+                aria-disabled={isJoiningOrg || isLoading}
                 onClick={() => handleJoinClick(org.id)}
+                onKeyDown={event => {
+                  if (event.key === 'Enter' || event.key === ' ') {
+                    event.preventDefault();
+                    handleJoinClick(org.id);
+                  }
+                }}
               >
                 <div style={{
                   display: 'flex',

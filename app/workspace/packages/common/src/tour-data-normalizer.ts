@@ -44,6 +44,7 @@ export function normalizeTourDataDocument(
   const lastUpdatedAtUtc = typeof value.lastUpdatedAtUtc === 'number' ? value.lastUpdatedAtUtc : -1;
 
   return {
+    ...value,
     v: version,
     lastUpdatedAtUtc,
     opts: { ...opts } as TourDataWoScheme['opts'],

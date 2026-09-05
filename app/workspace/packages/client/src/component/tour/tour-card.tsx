@@ -219,6 +219,7 @@ export default function TourCard({
               >
                 <Button
                   id="TG-3"
+                  aria-label={`Actions for ${tour.displayName}`}
                   style={{ padding: 0, margin: 0 }}
                   size="small"
                   shape="circle"

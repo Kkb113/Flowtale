@@ -1,6 +1,7 @@
 package com.sharefable.api.transport;
 
 import com.fasterxml.jackson.annotation.JsonIgnore;
+import com.fasterxml.jackson.annotation.JsonProperty;
 import com.fasterxml.jackson.annotation.JsonSubTypes;
 import com.fasterxml.jackson.annotation.JsonTypeInfo;
 import com.fasterxml.jackson.core.type.TypeReference;
@@ -8,6 +9,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sharefable.api.common.MapSerializable;
 import lombok.Builder;
 import lombok.Data;
+import lombok.NoArgsConstructor;
 import lombok.experimental.SuperBuilder;
 
 import java.util.Map;
@@ -16,9 +18,11 @@ import java.util.Random;
 
 @JsonTypeInfo(
     use = JsonTypeInfo.Id.NAME,
+    include = JsonTypeInfo.As.EXISTING_PROPERTY,
     property = "type"
 )
 @JsonSubTypes({
+    @JsonSubTypes.Type(name = AudioTranscodingJobInfo.DISCRIMINATOR, value = AudioTranscodingJobInfo.class),
     @JsonSubTypes.Type(
         name = VideoTranscodingJobInfo.DISCRIMINATOR,
         value = VideoTranscodingJobInfo.class
@@ -29,6 +33,7 @@ import java.util.Random;
     ),
 })
 @Data
+@NoArgsConstructor
 @GenerateTSDef
 @SuperBuilder(toBuilder = true)
 public abstract class JobProcessingInfo implements MapSerializable {
@@ -39,7 +44,7 @@ public abstract class JobProcessingInfo implements MapSerializable {
     private String duration = "-1s";
     private String key;
 
-    @JsonTypeInfo(use = JsonTypeInfo.Id.NAME)
+    @JsonProperty(access = JsonProperty.Access.READ_ONLY)
     public abstract String getType();
 
     @Override

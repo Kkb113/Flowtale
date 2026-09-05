@@ -3,11 +3,13 @@ package com.sharefable.api.controller.v1;
 import com.sharefable.Routes;
 import com.sharefable.api.auth.AuthUser;
 import com.sharefable.api.common.ApiResp;
+import com.sharefable.api.common.PublicationValidationException;
 import com.sharefable.api.common.TopLevelEntityType;
 import com.sharefable.api.config.AppSettings;
 import com.sharefable.api.entity.ApiKey;
 import com.sharefable.api.entity.User;
 import com.sharefable.api.service.EntityService;
+import com.sharefable.api.service.CreationMutationService;
 import com.sharefable.api.service.WorkspaceService;
 import com.sharefable.api.transport.EditTour;
 import com.sharefable.api.transport.OnboardingTourForPrev;
@@ -33,9 +35,15 @@ import java.util.Optional;
 @RequiredArgsConstructor
 public class TourController {
   private final EntityService entityService;
+  private final CreationMutationService creationMutations;
   private final WorkspaceController wsController;
   private final WorkspaceService wsService;
   private final AppSettings appSettings;
+
+  @ExceptionHandler(PublicationValidationException.class)
+  public org.springframework.http.ResponseEntity<java.util.Map<String, String>> publicationValidation(PublicationValidationException error) {
+    return org.springframework.http.ResponseEntity.unprocessableEntity().body(java.util.Map.of("message", error.getMessage()));
+  }
 
   @RequestMapping(value = Routes.GET_ALL_TOURS, method = RequestMethod.GET, produces = MediaType.APPLICATION_JSON_VALUE)
   //@PreAuthorize("hasAuthority(@Perm.READ_TOUR)")
@@ -47,16 +55,25 @@ public class TourController {
 
   @RequestMapping(value = Routes.NEW_TOUR, method = RequestMethod.POST, produces = MediaType.APPLICATION_JSON_VALUE)
   //@PreAuthorize("hasAuthority(@Perm.WRITE_TOUR)")
-  public ApiResp<RespDemoEntity> newTour(@RequestBody ReqNewTour body, @AuthUser User user) {
+  public ApiResp<RespDemoEntity> newTour(@RequestBody ReqNewTour body, @AuthUser User user,
+      @RequestHeader(value = "Idempotency-Key", required = false) String retryKey) {
     ReqNewTour req = body.normalizeDisplayName();
-    RespDemoEntity tour = entityService.createNewEntity(req, user, TopLevelEntityType.TOUR);
+    RespDemoEntity tour = creationMutations.execute(retryKey, "tour-create", user, req, RespDemoEntity.class,
+      () -> entityService.createNewEntity(req, user, TopLevelEntityType.TOUR));
     return ApiResp.<RespDemoEntity>builder().status(ApiResp.ResponseStatus.Success).data(tour).build();
   }
 
   @RequestMapping(value = Routes.GET_TOUR, method = RequestMethod.GET, produces = MediaType.APPLICATION_JSON_VALUE)
-  public ApiResp<RespDemoEntity> getTourByRId(@RequestParam("rid") String rId, @RequestParam("s") Optional<Boolean> shouldGetScreens, @RequestParam("_i") Optional<Boolean> shouldGetDeleted) {
-    RespDemoEntity tour = entityService.getEntityByRid(rId, shouldGetScreens.orElse(Boolean.FALSE), shouldGetDeleted.orElse(Boolean.FALSE), TopLevelEntityType.TOUR);
+  public ApiResp<RespDemoEntity> getTourByRId(@RequestParam("rid") String rId,
+      @RequestParam("s") Optional<Boolean> shouldGetScreens, @AuthUser User user) {
+    RespDemoEntity tour = entityService.getDraftByRid(rId, shouldGetScreens.orElse(false), TopLevelEntityType.TOUR, user);
     return ApiResp.<RespDemoEntity>builder().data(tour).build();
+  }
+
+  @RequestMapping(value = Routes.GET_TOUR_BY_RID_INTERNAL, method = RequestMethod.GET, produces = MediaType.APPLICATION_JSON_VALUE)
+  public ApiResp<RespDemoEntity> getTourByRidForService(@PathVariable("rid") String rid) {
+    return ApiResp.<RespDemoEntity>builder()
+      .data(entityService.getEntityByRid(rid, false, false, TopLevelEntityType.TOUR)).build();
   }
 
   @RequestMapping(value = Routes.GET_TOUR_BY_ID, method = RequestMethod.GET, produces = MediaType.APPLICATION_JSON_VALUE)
@@ -67,8 +84,10 @@ public class TourController {
 
   @RequestMapping(value = Routes.RECORD_TOUR_EDIT, method = RequestMethod.POST, produces = MediaType.APPLICATION_JSON_VALUE)
   //@PreAuthorize("hasAuthority(@Perm.WRITE_TOUR)")
-  public ApiResp<RespDemoEntity> recordTourIndexEdit(@RequestBody ReqRecordEdit body, @AuthUser User user) {
-    RespDemoEntity resp = entityService.updateEditForTour(body, user, EditTour.INDEX);
+  public ApiResp<RespDemoEntity> recordTourIndexEdit(@RequestBody ReqRecordEdit body, @AuthUser User user,
+      @RequestHeader(value = "Idempotency-Key", required = false) String retryKey) {
+    RespDemoEntity resp = creationMutations.execute(retryKey, "tour-index", user, body, RespDemoEntity.class,
+      () -> entityService.updateEditForTour(body, user, EditTour.INDEX));
     return ApiResp.<RespDemoEntity>builder().data(resp).build();
   }
 
@@ -97,9 +116,11 @@ public class TourController {
   @RequestMapping(value = Routes.DUPLICATE_TOUR, method = RequestMethod.POST, produces = MediaType.APPLICATION_JSON_VALUE)
   //@PreAuthorize("hasAuthority(@Perm.WRITE_TOUR)")
   @Transactional
-  public ApiResp<RespDemoEntityWithSubEntities> duplicateTour(@RequestBody ReqDuplicateTour body, @AuthUser User user) {
+  public ApiResp<RespDemoEntityWithSubEntities> duplicateTour(@RequestBody ReqDuplicateTour body, @AuthUser User user,
+      @RequestHeader(value = "Idempotency-Key", required = false) String retryKey) {
     ReqDuplicateTour nBody = body.normalizeDisplayName();
-    RespDemoEntityWithSubEntities resp = entityService.duplicateTour(nBody, user);
+    RespDemoEntityWithSubEntities resp = creationMutations.execute(retryKey, "tour-duplicate", user, nBody,
+      RespDemoEntityWithSubEntities.class, () -> entityService.duplicateTour(nBody, user));
     return ApiResp.<RespDemoEntityWithSubEntities>builder().data(resp).build();
   }
 
@@ -155,9 +176,8 @@ public class TourController {
   @RequestMapping(value = Routes.GET_ALL_TOURS_BY_API_KEY, method = RequestMethod.GET, produces = MediaType.APPLICATION_JSON_VALUE)
   public ApiResp<List<RespDemoEntity>> getAllTours(@RequestHeader(name = "X-API-KEY") String apiKey) {
     ApiKey key = wsService.getApiKey(apiKey);
-    log.info("GET_ALL_TOURS_API_KEY api key {}", apiKey);
     if (key == null) {
-      log.error("Can't find api key {}", apiKey);
+      log.warn("API key authentication failed");
       throw new ResponseStatusException(HttpStatusCode.valueOf(404));
     }
     List<RespDemoEntity> allTours = entityService.getAllEntityForOrg(key.getOrg().getId(), TourDeleted.ACTIVE, TopLevelEntityType.TOUR);

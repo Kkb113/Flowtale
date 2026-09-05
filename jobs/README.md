@@ -1,5 +1,7 @@
 # Fable Jobs Service
 
+Existing installations must follow the [capture asset privacy cutover](../api/capture-asset-migration.md) before deploying the Phase 0 private asset readers. The migration scripts default to dry run and preserve private backups.
+
 The jobs service is the asynchronous worker and companion Express API for the Fable interactive-demo platform. It consumes SQS jobs, processes media and analytics work, handles integrations, and exposes selected LLM, audio, Slack, and health endpoints on port 8081.
 
 ## Main components
@@ -10,7 +12,7 @@ The jobs service is the asynchronous worker and companion Express API for the Fa
 - `src/http/` contains the Express server and HTTP operations.
 - `src/json-schema/` contains the TypeScript sources for generated LLM tool schemas.
 
-The current runtime integrates with MySQL, PostgreSQL, SQS, S3, Elastic Transcoder, Auth0, Anthropic, OpenAI, and optional third-party systems. Provider-agnostic AI/TTS behavior is planned work; it is not part of the baseline cleanup.
+The runtime integrates with MySQL, PostgreSQL, SQS, S3, a pinned FFmpeg worker, API-verified user identity, and optional Anthropic, OpenAI and third-party systems. Provider replacement remains Phase 3 work.
 
 ## Supported toolchain
 
@@ -49,6 +51,9 @@ SQS_Q_REGION=ap-south-1
 AWS_S3_REGION=ap-south-1
 AWS_ASSET_FILE_S3_BUCKET=your-bucket
 AWS_ASSET_FILE_S3_BUCKET_REGION=ap-south-1
+AWS_PRIVATE_ASSET_S3_BUCKET=pvt-mics
+AWS_PRIVATE_ASSET_S3_BUCKET_REGION=ap-south-1
+AWS_ASSET_ROOT_QUALIFIER=root
 
 # Operational MySQL database
 DB_CONN_URL=localhost:3306
@@ -90,6 +95,16 @@ The service starts its HTTP server and its SQS polling loop. A health check is a
 
 The Makefile also contains environment-selection and deployment helpers used by the existing AWS workflow. These commands can affect queues, containers, or ECR and are not part of baseline verification.
 
-## Known dependency risk
+## Private AI image boundary
 
-AWS Elastic Transcoder is represented by a deprecated SDK client whose transitive dependencies still produce an npm audit finding. Replacing the media-transcoding integration requires a deliberate behavior migration; do not use a forced audit update as a substitute.
+Private bucket, environment and root qualifier must match the API's private S3 configuration. Upload responses return an `objectKey`; clients pass that key to AI operations instead of deriving it from a storage URL. Reads require the API-verified workspace and the prefix `{APP_ENV}/{root}/tour_data/org/{orgId}/{captureSession}/llmops/`. The one shared theme fixture `staging/root/global/sample_ann.png` is explicitly allowed; other global keys are inaccessible through this endpoint.
+
+Reads allow PNG/JPEG bytes, at most 50 images, 5 MB per image and 40 MB per request, within a shared 30-second deadline. Missing, invalid or unauthorized assets fail the operation before provider execution. Image contents and storage URLs are not included in image-read error logs.
+
+Deploy the API, client and worker changes together. Existing unscoped private references are intentionally rejected, rather than granting access based on a client-supplied capture ID. Captures retained in IndexedDB can be reuploaded through the new path. Historical private objects remain untouched. Legacy capture retry UX and production rollout verification remain open Phase 0 acceptance work.
+
+For the real local storage check, build jobs, start the local platform, then run `node jobs/scripts/verify-private-assets.js` from the repository root. It uses only loopback endpoints and local fixture credentials, and deletes only the two image objects it created.
+
+## Publication maintenance
+
+Historical deployments require the [private draft migration](../api/draft-storage-migration.md), [public edit-history repair](../api/public-edit-history-migration.md), and [published-screen repair](../api/published-screen-migration.md). These are explicit maintenance operations, not automatic worker startup tasks. Follow their writer-stop, private-backup, repeatability and CDN verification requirements. The published-screen repair invokes the verified API compiler through an offline subprocess and resumes interrupted writes from a private repair plan.

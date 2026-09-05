@@ -113,6 +113,7 @@ export interface Dataset {
 
 export interface EntityInfo {
     thumbnail: string;
+    thumbnailData?: string;
     frameSettings: FrameSettings;
     locked?: boolean;
     annDemoId?: string;
@@ -145,6 +146,7 @@ export interface LLMOps extends EntityBase {
 }
 
 export interface AudioTranscodingJobInfo extends JobProcessingInfo {
+    type: "TRANSCODE_AUDIO";
     sourceFilePath: string;
     processedFilePath: string;
     sub: AudioProcessingSub;
@@ -157,16 +159,18 @@ export interface ButtonClicks {
 }
 
 export interface CreateGifJobInfo extends JobProcessingInfo {
+    type: "CreateGifJobInfo";
     manifestFilePath: string;
     gifFilePath: string;
 }
 
 export interface EntityHoldingInfoBase extends Serializable {
+    type: "media";
     __id: number;
-    type: string;
 }
 
 export interface ImgResizingJobInfo extends JobProcessingInfo {
+    type: "RESIZE_IMG";
     sourceFilePath: string;
     processedFilePath: string;
     resolution: string;
@@ -178,13 +182,14 @@ export interface InviteCode {
 }
 
 export interface JobProcessingInfo extends MapSerializable {
+    type: "TRANSCODE_AUDIO" | "CreateGifJobInfo" | "RESIZE_IMG" | "TRANSCODE_VIDEO";
     __id: number;
     duration: string;
     key: string;
-    type: string;
 }
 
 export interface MediaTypeEntityHolding extends EntityHoldingInfoBase {
+    type: "media";
     fullFilePaths: string[];
     deletable: boolean;
 }
@@ -283,6 +288,7 @@ export interface TourSettings {
 }
 
 export interface VideoTranscodingJobInfo extends JobProcessingInfo {
+    type: "TRANSCODE_VIDEO";
     sourceFilePath: string;
     processedFilePath: string;
     sub: VideoProcessingSub;
@@ -313,6 +319,7 @@ export interface ReqAddOrUpdateLeadInfo {
 
 export interface ReqAssignOrgToUser {
     orgId: number;
+    inviteCode?: string;
 }
 
 export interface ReqCobaltEvent {
@@ -645,6 +652,7 @@ export interface RespOrg extends ResponseBase {
     rid: string;
     displayName: string;
     thumbnail: string;
+    thumbnailData?: string;
     info: OrgInfo;
     createdBy: RespUser;
 }
@@ -674,6 +682,7 @@ export interface RespScreen extends ResponseBase {
     displayName: string;
     createdBy: RespUser;
     thumbnail: string;
+    thumbnailData?: string;
     url: string;
     icon: string;
     responsive: boolean;
@@ -708,6 +717,7 @@ export interface RespUploadUrl {
     expiry: string;
     filename: string;
     cdnPath: string;
+    objectKey?: string;
 }
 
 export interface RespUser extends ResponseBase {
@@ -850,6 +860,10 @@ export interface VanityDomainRecords {
     recordKey: string;
     recordValue: string;
 }
+
+export type EntityHoldingInfoBaseUnion = MediaTypeEntityHolding;
+
+export type JobProcessingInfoUnion = AudioTranscodingJobInfo | VideoTranscodingJobInfo | ImgResizingJobInfo;
 
 export const enum AnalyticsJobType {
     REFRESH_ENTITY_METRICS_MATERIALIZED_VIEW = "REFRESH_ENTITY_METRICS_MATERIALIZED_VIEW",

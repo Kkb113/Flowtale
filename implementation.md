@@ -1,6 +1,6 @@
 # Fable Production Implementation Specification
 
-**Status:** Planned work. No phase is certified complete by this document.
+**Status:** Phase 0 core implementation accepted on 2026-09-06 against the user-directed scope in Section 8. [Acceptance evidence](phase0-review.md) records passing local validation and retained limitations. Production rollout requires the [asset privacy cutover](api/capture-asset-migration.md). Phases 1–5 remain planned.
 
 **Reviewed:** 2026-09-05. **Repository baseline:** `c20e085` — establish safe demo editing foundation.
 
@@ -462,14 +462,20 @@ Offscreen embeds lazy-load and reserve dimensions. Use a poster/start surface wh
 
 **Purpose:** Leave the existing platform stable and understood before major architectural implementation. This phase contains audit, characterization, necessary reliability/security fixes, cleanup and development-foundation work. It does not introduce the new visual editor, broad copilot, new document architecture or new product categories.
 
-**Current state and affected systems:** All areas in Section 2. Existing partial safety work is retained but does not satisfy the phase. The most urgent dependencies are capture -> creation -> save -> publish, source rendering/privacy, and media/jobs.
+**Current state and affected systems:** The core demo workflow in Section 2. Existing partial safety work is retained but does not satisfy the phase. The most urgent dependencies are capture -> creation -> save -> publish, source rendering/privacy, and media/jobs.
+
+**Scope decision (September 5, user-directed):** Finish the main product before revising temporary billing or secondary features. Phase 0 acceptance covers capture, manual creation/import/duplication, current editing (including branches, forms, loader and responsive behavior), durable save/recovery, preview/player/embed, publication/privacy, and existing media processing. Retain the access protections already implemented because private drafts and workspace isolation protect these workflows.
+
+**Redaction decision (September 5, user-directed):** Opaque blocks are the supported replacement for privacy blur. Capture the selected element's dimensions, remove protected serialized descendants and metadata from public output, retain reversible private authoring state, and preserve uploaded replacement masks without their original contents. Publication must reject unresolved or overlapping targets with a useful recovery message. Repair historical published snapshots with the same compiler and verified private backups. This choice does not waive source-image, thumbnail, proxy-asset or cache privacy requirements.
+
+Further membership administration, seat/billing reconciliation and commercial-plan redesign are deferred. Standalone hub, dataset, custom-domain, analytics-dashboard and third-party integration expansion/qualification are also deferred; their existing code and passing regressions remain, and any shared dependency that breaks the core demo workflow remains in scope. The current billing setup is temporary: do not build a replacement billing architecture during Phase 0. Real provider replacement and new AI capabilities remain P3/P4. Record deferred work for later qualification rather than treating it as a Phase 0 blocker. This scope decision supersedes broader Phase 0 wording elsewhere in this document and older review checkpoints; it does not defer core security or data-loss defects.
 
 ### 8.1 Required work
 
 | Workstream | Required work and evidence |
 | --- | --- |
-| Complete inventory | Enumerate packages, routes, APIs, workers, persisted formats, feature flags, entitlement checks, storage objects, generated contracts and external services. Trace every authoring writer and every reader/derivative. Record permission boundaries and ownership. |
-| Behavior characterization | Exercise actual recording, manual/AI creation where configured, every current edit type, branches/forms/media, save/reload, publish, embeds, hubs, datasets and analytics using safe fixtures. Compare behavior with types/UI claims and this matrix. |
+| Complete inventory | Enumerate core packages, routes, APIs, workers, persisted formats, feature flags, necessary access checks, storage objects and generated contracts. Trace every core authoring writer and every reader/derivative; record secondary integrations as dependencies or deferred surfaces. Record permission boundaries and ownership. |
+| Behavior characterization | Exercise actual recording, manual/AI creation where configured, every current edit type, branches/forms/media, save/reload, publish and embeds using safe fixtures. Preserve existing secondary-surface regression coverage without expanding those products. Compare behavior with types/UI claims and this matrix. |
 | Bug triage | Reproduce observed risks; record affected paths, input, expected/actual result, severity and regression test. Distinguish confirmed defects, environment failures, obsolete code and unverified risks. Fix blockers and important reliability defects before proceeding. |
 | Capture transfer | Implement durable acknowledgement/session integrity, duplicate/restart handling, useful failure reporting and removal of fragile timer-based completion assumptions. Preserve legacy transfer only until supported extension/client versions are migrated. |
 | Creation/uploads | Settle promises on success/failure, enforce timeouts/cancellation, verify PUT status/checksum, retain recoverable captures and provide retry without duplicate demos/assets. |
@@ -480,7 +486,7 @@ Offscreen embeds lazy-load and reserve dimensions. Use a poster/start surface wh
 | Contracts | Fail schema generation on errors, verify generated outputs are consistent, characterize legacy data and unknown-field preservation, and identify duplicated schemas for P1/P3. |
 | Local development | Reproducible local MySQL/PostgreSQL/object storage/queue and seed data, a production-disabled local auth mode, optional integration modules and no mandatory unrelated cloud keys. |
 | CI and diagnostics | Real product-route integration tests, deterministic fixtures, build/lint/type gates, useful redacted logs and baseline timing/memory metrics. Tests must fail when saves/uploads/jobs fail. |
-| Advanced surfaces | Inventory actual tour CSS/effects and hub script consumers separately. Establish supported replacement hooks before P2; remove unused unsafe prototype routes only after checking callers. |
+| Advanced surfaces | Inventory current tour CSS/effects and separate secondary hub script dependencies. Retain the requirement for supported replacement hooks before their P2 migration; remove unused unsafe prototype routes only after checking callers. |
 
 For existing media, use a pinned supported FFmpeg worker inside the jobs deployment, with resource/time/output limits, validated inputs, compatible MP4/WebM/HLS outputs and metadata. Preserve already-generated assets; never regenerate on read. Validate distribution/licensing for the deployment. This restores an existing feature without expanding into general video export. [FFmpeg format documentation](https://ffmpeg.org/ffmpeg-formats.html)
 
@@ -492,7 +498,7 @@ For privacy issues that cannot be safely remediated immediately, prevent the uns
 
 Maintain a current-system inventory, issue/decision register, representative sanitized legacy demos, route/permission matrix, write/read dependency map, and baseline verification results. These support this specification; they must not define conflicting scope.
 
-Characterize at least: empty/one-screen demos, multi-annotation screens, nested optional branches, cover/hotspot/form steps, shared/global edits, HTML/image/media screens, style inheritance, responsive and fixed layouts, nested scrolling/frames, missing assets/targets, narration on/off, drafts/published versions, datasets, hubs and custom domains.
+Characterize at least: empty/one-screen demos, multi-annotation screens, nested optional branches, cover/hotspot/form steps, shared/global edits, HTML/image/media screens, style inheritance, responsive and fixed layouts, nested scrolling/frames, missing assets/targets, narration on/off, drafts/published versions. Dataset personalization already used by a core demo must keep working; full standalone dataset, hub and custom-domain qualification is deferred.
 
 Measure actual capture/import/editor/player/publish behavior before selecting optimization work. A bounded isolated experiment may validate render sandbox and geometry feasibility; it must not start a production editor migration during P0.
 
@@ -500,7 +506,7 @@ Measure actual capture/import/editor/player/publish behavior before selecting op
 
 All are required:
 
-1. Every major subsystem and current authoring mutation has an identified owner, source path, data dependency and verification case.
+1. Every core subsystem and current core authoring mutation has an identified owner, source path, data dependency and verification case.
 2. No unresolved critical/high-severity security, data-loss or broken-core-workflow issue remains. Lesser issues have explicit impact and cannot block later architecture.
 3. Actual extension-to-client capture survives interruption/duplicate delivery and completes manual creation without external services.
 4. Current important editing, branches, forms, media, save/reload and publication behavior is tested through real routes; existing regression suites still pass.
@@ -689,6 +695,9 @@ Include duplicate labels, ambiguous anchor requests, impossible screen requests,
 **Entry:** P0-P4 gates accepted, active data migrated, and deprecated production paths removed.
 
 ### 13.1 Required work
+
+**Deferred from Phase 0 by user direction:** Revisit membership administration, legacy inactive-owner recovery, seat reconciliation and the temporary billing model before commercial rollout. Qualify standalone hubs, datasets, custom domains, analytics dashboards and integrations when those surfaces are revised. Define their product/permission/migration requirements before implementation; retain existing core access protections and do not make core creation/editing/playback depend on an unavailable billing provider.
+
 
 - Run the full fixture matrix in Chromium, Firefox and WebKit; validate actual iOS Safari and Android Chrome for viewer/media/touch behavior. Extension capture targets supported Chrome versions.
 - Conduct keyboard/screen-reader/non-drag accessibility review and author usability sessions. Verify readable small embeds, 200% zoom, RTL, focus restoration and reduced motion.

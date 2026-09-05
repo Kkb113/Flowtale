@@ -1,6 +1,7 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 import './index.css';
+import 'animate.css/animate.min.css';
 import { Provider } from 'react-redux';
 import { ThemeProvider } from 'styled-components';
 import { ConfigProvider as AntDesignThemeConfigProvider } from 'antd';
@@ -12,11 +13,13 @@ import config from './store-config';
 import packageJSON from '../package.json';
 import { LOCAL_STORE_TIMELINE_ORDER_KEY } from './utils';
 import Player from './container/player';
+import PreviewRoutes, { PreviewContent } from './container/protected-routes/preview-routes';
 import PreviewForCta from './container/preview-for-cta';
 import RedirectFromP from './container/redirect-from-p';
 import ErrorBoundary from './component/error-boundary';
 import DemoHubQualification from './container/dh-qualification';
 import DemoHubSeeAll from './container/demo-hub-see-all';
+import { isLocalDevelopment } from './local-development';
 
 export const APP_CLIENT_ENDPOINT = process.env.REACT_APP_CLIENT_ENDPOINT as string;
 
@@ -26,16 +29,21 @@ function addReditusTrackingScript(): void {
   document.head.appendChild(script);
 }
 
-function addChargebeeScript(): void {
-  const script = document.createElement('script');
-  script.setAttribute('src', 'https://js.chargebee.com/v2/chargebee.js');
-  document.head.appendChild(script);
+function addProductFonts(): void {
+  if (document.getElementById('fable-product-fonts')) return;
+  const link = document.createElement('link');
+  link.id = 'fable-product-fonts';
+  link.rel = 'stylesheet';
+  const weights = 'ital,wght@0,100;0,200;0,300;0,400;0,500;0,600;0,700;1,100;1,200;1,300;1,400;1,500;1,600;1,700';
+  link.href = `https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:${weights}&family=IBM+Plex+Sans:${weights}&display=swap`;
+  document.head.appendChild(link);
 }
 
 const isPhase0Characterization = process.env.NODE_ENV !== 'production'
-  && document.location.pathname === '/__phase0/editor';
+  && ['/__phase0/editor', '/__phase0/renderer'].includes(document.location.pathname);
 
-if (document.location.pathname !== '/aboutblank' && !isPhase0Characterization) {
+if (document.location.pathname !== '/aboutblank' && !isPhase0Characterization && !isLocalDevelopment) {
+  addProductFonts();
   console.log(`Version: ${packageJSON.version}`);
 
   try {
@@ -54,7 +62,6 @@ if (document.location.pathname !== '/aboutblank' && !isPhase0Characterization) {
     sentryInit('client-preview', packageJSON.version);
   } else {
     sentryInit('client', packageJSON.version);
-    addChargebeeScript();
     addReditusTrackingScript();
     import('@fable/common/dist/amplitude').then((res) => {
       res.initProductAnalytics();
@@ -103,8 +110,6 @@ const theme = {
   },
 };
 
-const urlSearchParams = new URLSearchParams(window.location.search);
-const staging = !!urlSearchParams.get('staging');
 const router = createBrowserRouter([
   {
     path: '',
@@ -149,6 +154,13 @@ const router = createBrowserRouter([
             .then(module => module.default);
           return { Component: Phase0Characterization };
         },
+      }, {
+        path: '/__phase0/renderer',
+        async lazy() {
+          const RendererCharacterization = await import('./container/phase0-characterization/renderer')
+            .then(module => module.default);
+          return { Component: RendererCharacterization };
+        },
       }] : []),
       {
         path: '/tours',
@@ -162,33 +174,38 @@ const router = createBrowserRouter([
         },
       },
       {
-        path: 'embed/tour/:tourId',
-        element: <Player staging={staging} title="Fable" />,
+        element: <PreviewRoutes />,
         children: [
           {
-            path: ':screenRid',
-            element: <Outlet />,
+            path: 'embed/tour/:tourId',
+            element: <PreviewContent component={Player} />,
             children: [
               {
-                path: ':annotationId',
+                path: ':screenRid',
                 element: <Outlet />,
-              }
+                children: [
+                  {
+                    path: ':annotationId',
+                    element: <Outlet />,
+                  }
+                ]
+              },
             ]
           },
-        ]
-      },
-      {
-        path: 'embed/demo/:tourId',
-        element: <Player staging={staging} title="Fable" />,
-        children: [
           {
-            path: ':screenRid',
-            element: <Outlet />,
+            path: 'embed/demo/:tourId',
+            element: <PreviewContent component={Player} />,
             children: [
               {
-                path: ':annotationId',
+                path: ':screenRid',
                 element: <Outlet />,
-              }
+                children: [
+                  {
+                    path: ':annotationId',
+                    element: <Outlet />,
+                  }
+                ]
+              },
             ]
           },
         ]
@@ -237,28 +254,33 @@ const router = createBrowserRouter([
         },
       },
       {
-        path: '/hub/seeall/:demoHubRid',
-        element: <DemoHubSeeAll staging={staging} title="Fable" />,
-      },
-      {
-        path: 'hub/q/:demoHubRid',
-        element: <DemoHubQualification staging={staging} title="Fable" />,
+        element: <PreviewRoutes />,
         children: [
           {
-            path: ':qualificationSlug',
-            element: <Outlet />,
+            path: '/hub/seeall/:demoHubRid',
+            element: <PreviewContent component={DemoHubSeeAll} />,
+          },
+          {
+            path: 'hub/q/:demoHubRid',
+            element: <PreviewContent component={DemoHubQualification} />,
             children: [
               {
-                path: 's/:stepSlug',
+                path: ':qualificationSlug',
                 element: <Outlet />,
                 children: [
                   {
-                    path: 'd/:demoRid',
+                    path: 's/:stepSlug',
                     element: <Outlet />,
+                    children: [
+                      {
+                        path: 'd/:demoRid',
+                        element: <Outlet />,
 
+                      }
+                    ]
                   }
                 ]
-              }
+              },
             ]
           },
         ]

@@ -74,6 +74,7 @@ import {
   onAnnCreateOrChangeFn
 } from '../../types';
 import EditingInteractiveDemoGuidePart2 from '../../user-guides/editing-interactive-demo-guide/part-2';
+import { measureRedaction, setElementRedacted } from './utils/redaction';
 import SelectorComponent from '../../user-guides/selector-component';
 import { UserGuideMsg } from '../../user-guides/types';
 import {
@@ -119,7 +120,7 @@ import PreviewWithEditsAndAnRO from './preview-with-edits-and-annotations-readon
 import ScreenImageBrusher from './screen-image-brushing';
 import * as Tags from './styled';
 import { StoredStyleForFormatPaste, StyleKeysToBeStored, StyleObjForFormatPaste } from './types';
-import { addImgMask, hideChildren, restrictCrtlType, unhideChildren } from './utils/creator-actions';
+import { addImgMask, restrictCrtlType } from './utils/creator-actions';
 import { uploadImgFileObjectToAws } from '../../upload-media-to-aws';
 import { WarningIcon } from '../header/styled';
 
@@ -388,8 +389,8 @@ export default class ScreenEditor extends React.PureComponent<IOwnProps, IOwnSta
               getCurrentUtcUnixTime(),
               tEncoding[IdxEncodingTypeImage.OLD_VALUE],
               null,
-              encoding[IdxEncodingTypeImage.HEIGHT]!,
-              encoding[IdxEncodingTypeImage.WIDTH]!,
+              tEncoding[IdxEncodingTypeImage.HEIGHT],
+              tEncoding[IdxEncodingTypeImage.WIDTH],
               fid,
             ]);
             this.flushMicroEdits();
@@ -409,6 +410,7 @@ export default class ScreenEditor extends React.PureComponent<IOwnProps, IOwnSta
               fid,
             ]);
             this.flushMicroEdits();
+            setElementRedacted(el!, false);
             el!.style.filter = tEncoding[IdxEncodingTypeBlur.OLD_FILTER_VALUE]!;
             break;
           }
@@ -436,8 +438,8 @@ export default class ScreenEditor extends React.PureComponent<IOwnProps, IOwnSta
             ]);
             this.flushMicroEdits();
 
+            if (el) setElementRedacted(el, false);
             el?.setAttribute('style', tEncoding[IdxEncodingTypeMask.OLD_STYLE]);
-            unhideChildren(el!);
             break;
           }
 
@@ -558,7 +560,7 @@ export default class ScreenEditor extends React.PureComponent<IOwnProps, IOwnSta
             <div style={{ display: 'flex', alignItems: 'center', width: '100%', justifyContent: 'space-between' }}>
               <div style={{ display: 'flex', alignItems: 'center' }}>
                 <FilterOutlined />
-                <div className="typ-sm" style={{ marginLeft: '0.5rem', flexShrink: 0 }}>Blured text</div>
+                <div className="typ-sm" style={{ marginLeft: '0.5rem', flexShrink: 0 }}>Redacted content</div>
               </div>
               {shouldShowLoading && <LoadingOutlined title="Saving..." />}
             </div>
@@ -766,9 +768,9 @@ export default class ScreenEditor extends React.PureComponent<IOwnProps, IOwnSta
       const newImageUrl = await uploadImgFileObjectToAws(maskImgFile);
       // TODO resize is not supported anymore
       const resizedImgUrl = '';
-      hideChildren(el);
 
       const oldElInlineStyles = el.getAttribute('style') || '';
+      const redactionRect = measureRedaction(el);
       const newElInlineStyles = addImgMask(el, resizedImgUrl, newImageUrl?.cdnUrl || '');
 
       const path = this.iframeElManager!.elPath(el);
@@ -781,7 +783,7 @@ export default class ScreenEditor extends React.PureComponent<IOwnProps, IOwnSta
       }
 
       const fid = this.getFidOfNodeWrapper(el, path);
-      this.addToMicroEdit(path, fid, ElEditType.Mask, [getCurrentUtcUnixTime(), newElInlineStyles, oldElInlineStyles, fid], true, false);
+      this.addToMicroEdit(path, fid, ElEditType.Mask, [getCurrentUtcUnixTime(), newElInlineStyles, oldElInlineStyles, fid, redactionRect], true, false);
       this.flushMicroEdits();
       amplitudeScreenEdited('mask_el', '');
     } catch (err) {
@@ -1199,11 +1201,12 @@ export default class ScreenEditor extends React.PureComponent<IOwnProps, IOwnSta
                     t.setAttribute(attrName, origVal);
                   }
 
+                  const redactionRect = measureRedaction(t);
                   if (checked) newVal = t.style.display = origVal;
                   else newVal = t.style.display = 'none';
 
                   const fid = this.getFidOfNodeWrapper(t, path);
-                  this.addToMicroEdit(path, fid, ElEditType.Display, [getCurrentUtcUnixTime(), origVal, newVal, fid], true, false);
+                  this.addToMicroEdit(path, fid, ElEditType.Display, [getCurrentUtcUnixTime(), origVal, newVal, fid, redactionRect], true, false);
                   this.flushMicroEdits();
                   amplitudeScreenEdited('show_or_hide_el', checked);
                 })(selectedEl!)}
@@ -1223,7 +1226,7 @@ export default class ScreenEditor extends React.PureComponent<IOwnProps, IOwnSta
         </Tags.EditCtrlLI>
 
         <Tags.EditCtrlLI>
-          <Tags.EditCtrlLabel className="typ-reg">Blur Element</Tags.EditCtrlLabel>
+          <Tags.EditCtrlLabel className="typ-reg">Redact Element</Tags.EditCtrlLabel>
           {
           editsFeaturesAvailable.includes(EditFeaturesAvailable.Blur)
             ? (
@@ -1233,7 +1236,8 @@ export default class ScreenEditor extends React.PureComponent<IOwnProps, IOwnSta
                 unCheckedChildren={<EyeInvisibleOutlined />}
                 defaultChecked={
               !!selectedEl
-              && (ScreenEditor.getBlurValueFromFilter(getComputedStyle(selectedEl).filter) === BLUR_VALUE
+              && ((selectedEl.dataset.fableRedacted === 'true' && selectedEl.dataset.fableRedactionKind !== 'mask')
+              || ScreenEditor.getBlurValueFromFilter(getComputedStyle(selectedEl).filter) === BLUR_VALUE
               || ScreenEditor.getBlurValueFromFilter(getComputedStyle(selectedEl).filter) === 3)
             }
                 onChange={((t) => (checked) => {
@@ -1260,13 +1264,13 @@ export default class ScreenEditor extends React.PureComponent<IOwnProps, IOwnSta
                   if (checked) {
                     newBlurValue = BLUR_VALUE;
                     newFilterStr = ScreenEditor.updateBlurValueToFilter(oldFilterStr, newBlurValue);
-                    t.style.filter = newFilterStr;
                   } else {
                     newBlurValue = oldBlurValue;
                     newFilterStr = oldFilterStr;
                     t.style.filter = oldFilterStr;
                   }
 
+                  const redactionRect = setElementRedacted(t, checked);
                   const fid = this.getFidOfNodeWrapper(t, path);
 
                   this.addToMicroEdit(path, fid, ElEditType.Blur, [
@@ -1276,6 +1280,7 @@ export default class ScreenEditor extends React.PureComponent<IOwnProps, IOwnSta
                     oldFilterStr,
                     newFilterStr,
                     fid,
+                    redactionRect,
                   ], true, false);
                   this.flushMicroEdits();
                   amplitudeScreenEdited('blur_el', checked);

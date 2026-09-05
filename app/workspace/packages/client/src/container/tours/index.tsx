@@ -59,10 +59,10 @@ interface Files {
 
 interface IDispatchProps {
   getAllTours: () => void;
-  createNewTour: (tourName: string, description: string) => void;
-  renameTour: (tour: P_RespTour, newVal: string, newDescription: string) => void;
-  duplicateTour: (tour: P_RespTour, displayName: string) => void;
-  deleteTour: (tourRid: string) => void;
+  createNewTour: (tourName: string, description: string) => Promise<void>;
+  renameTour: (tour: P_RespTour, newVal: string, newDescription: string) => Promise<void>;
+  duplicateTour: (tour: P_RespTour, displayName: string) => Promise<void>;
+  deleteTour: (tourRid: string) => Promise<void>;
   publishTour: (tour: P_RespTour) => Promise<boolean>,
   updateTourProp: <T extends keyof ReqTourPropUpdate>(
     rid: string,
@@ -130,6 +130,7 @@ interface IOwnProps {
 type IProps = IOwnProps & IAppStateProps & IDispatchProps & WithRouterProps<{}>;
 interface IOwnStateProps {
   showModal: boolean;
+  modalSaving: boolean;
   selectedTour: P_RespTour | null;
   ctxAction: CtxAction;
   isExtInstalled: boolean;
@@ -142,6 +143,10 @@ interface IOwnStateProps {
 const { confirm } = Modal;
 
 class Tours extends React.PureComponent<IProps, IOwnStateProps> {
+  private modalRequestPending = false;
+
+  private disposed = false;
+
   renameOrDuplicateOrCreateIpRef: React.RefObject<HTMLInputElement> = React.createRef();
 
   interval : null | NodeJS.Timeout = null;
@@ -152,6 +157,7 @@ class Tours extends React.PureComponent<IProps, IOwnStateProps> {
     super(props);
     this.state = {
       showModal: false,
+      modalSaving: false,
       selectedTour: null,
       ctxAction: CtxAction.NA,
       isExtInstalled: false,
@@ -191,6 +197,7 @@ class Tours extends React.PureComponent<IProps, IOwnStateProps> {
   };
 
   componentWillUnmount(): void {
+    this.disposed = true;
     this.clearExtensionInstallInterval();
   }
 
@@ -199,11 +206,6 @@ class Tours extends React.PureComponent<IProps, IOwnStateProps> {
       if (this.props.opsInProgress === Ops.DuplicateTour) {
         message.warning({
           content: 'Demo duplication is in progress! Please don\'t close this tab',
-        });
-      } else if (this.props.opsInProgress === Ops.None) {
-        message.info({
-          content: 'Duplication successful!',
-          duration: 2
         });
       }
     }
@@ -286,14 +288,14 @@ class Tours extends React.PureComponent<IProps, IOwnStateProps> {
           if (file.hasScreensData) {
             try {
               const json = await resp.clone().json();
-              let screens = json.data.screens as P_RespScreen[];
+              const screens = json.data.screens as P_RespScreen[];
               const config = json.data.cc as RespCommonConfig;
 
-              screens = screens.map(s => processRawScreenData(s, config, json.data));
-
-              screens.forEach(screen => {
+              screens.forEach(rawScreen => {
+                const screen = processRawScreenData(rawScreen, config, json.data);
                 const screenFile = {
-                  url: `${process.env.REACT_APP_API_ENDPOINT}/v1/screen?rid=${screen.rid}`,
+                  // Export the same screen metadata as the pinned publication, not the current draft.
+                  data: JSON.stringify({ data: rawScreen }),
                   name: `v1/screen/${screen.rid}`
                 };
 
@@ -648,51 +650,78 @@ class Tours extends React.PureComponent<IProps, IOwnStateProps> {
   };
 
   handleDelete = (tour: P_RespTour | null): void => {
-    confirm({
+    if (!tour) return;
+    let pending = false;
+    const remove = async (close: () => void): Promise<void> => {
+      if (pending) return;
+      pending = true;
+      dialog.update({ okButtonProps: { loading: true, 'aria-label': 'Delete', 'aria-busy': true }, cancelButtonProps: { disabled: true }, keyboard: false });
+      try {
+        await this.props.deleteTour(tour.rid);
+        try {
+          traceEvent(AMPLITUDE_EVENTS.GENERAL_TOUR_ACTIONS, {
+            tour_action_type: 'delete',
+            tour_url: createIframeSrc(`/demo/${tour.rid}`)
+          }, [CmnEvtProp.EMAIL]);
+        } catch { /* Analytics must not turn a confirmed deletion into a failure. */ }
+        close();
+      } catch {
+        dialog.update({ content: 'Deletion could not be confirmed. Retry or refresh to check the current status.' });
+      } finally {
+        pending = false;
+        dialog.update({ okButtonProps: { loading: false, 'aria-label': 'Delete', 'aria-busy': false }, cancelButtonProps: { disabled: false }, keyboard: true });
+      }
+    };
+    const dialog = confirm({
       title: 'Are you sure you want to delete this demo ?',
       okText: 'Delete',
       okType: 'danger',
-      onOk: () => {
-        traceEvent(AMPLITUDE_EVENTS.GENERAL_TOUR_ACTIONS, {
-          tour_action_type: 'delete',
-          tour_url: createIframeSrc(`/demo/${tour!.rid}`)
-        }, [CmnEvtProp.EMAIL]);
-        this.props.deleteTour(tour!.rid);
-      },
+      okButtonProps: { 'aria-label': 'Delete' },
+      onOk: (close: () => void) => { remove(close); },
     });
   };
 
-  handleModalOk = (): void => {
+  handleModalOk = async (): Promise<void> => {
+    if (this.modalRequestPending) return;
     const newVal = this.renameOrDuplicateOrCreateIpRef.current!.value.trim().replace(/\s+/, ' ');
     const descriptionVal = this.renameOrDuplicateOrCreateDescRef.current!.value.trim();
     if (!newVal) return;
-    if (this.state.ctxAction === CtxAction.Rename) {
-      if (newVal.toLowerCase() === this.state.selectedTour!.displayName.toLowerCase()
+    this.modalRequestPending = true;
+    this.setState({ modalSaving: true });
+    try {
+      if (this.state.ctxAction === CtxAction.Rename) {
+        if (newVal.toLowerCase() === this.state.selectedTour!.displayName.toLowerCase()
        && descriptionVal.toLowerCase() === this.state.selectedTour!.description.toLowerCase()) {
-        return;
+          return;
+        }
+        traceEvent(AMPLITUDE_EVENTS.GENERAL_TOUR_ACTIONS, {
+          tour_action_type: 'rename',
+          tour_url: createIframeSrc(`/demo/${this.state.selectedTour!.rid}`)
+        }, [CmnEvtProp.EMAIL]);
+        await this.props.renameTour(this.state.selectedTour!, newVal, descriptionVal);
+      } else if (this.state.ctxAction === CtxAction.Duplicate) {
+        traceEvent(AMPLITUDE_EVENTS.GENERAL_TOUR_ACTIONS, {
+          tour_action_type: 'duplicate',
+          tour_url: createIframeSrc(`/demo/${this.state.selectedTour!.rid}`)
+        }, [CmnEvtProp.EMAIL]);
+        await this.props.duplicateTour(this.state.selectedTour!, newVal);
+        message.success('Duplication successful!');
+      } else if (this.state.ctxAction === CtxAction.Create) {
+        traceEvent(
+          AMPLITUDE_EVENTS.CREATE_NEW_TOUR,
+          { from: 'app', tour_name: newVal },
+          [CmnEvtProp.EMAIL]
+        );
+        await this.props.createNewTour(newVal, descriptionVal);
       }
-      traceEvent(AMPLITUDE_EVENTS.GENERAL_TOUR_ACTIONS, {
-        tour_action_type: 'rename',
-        tour_url: createIframeSrc(`/demo/${this.state.selectedTour!.rid}`)
-      }, [CmnEvtProp.EMAIL]);
-      this.props.renameTour(this.state.selectedTour!, newVal, descriptionVal);
-      this.state.selectedTour!.displayName = newVal;
-    } else if (this.state.ctxAction === CtxAction.Duplicate) {
-      traceEvent(AMPLITUDE_EVENTS.GENERAL_TOUR_ACTIONS, {
-        tour_action_type: 'duplicate',
-        tour_url: createIframeSrc(`/demo/${this.state.selectedTour!.rid}`)
-      }, [CmnEvtProp.EMAIL]);
-      this.props.duplicateTour(this.state.selectedTour!, newVal);
-    } else if (this.state.ctxAction === CtxAction.Create) {
-      traceEvent(
-        AMPLITUDE_EVENTS.CREATE_NEW_TOUR,
-        { from: 'app', tour_name: newVal },
-        [CmnEvtProp.EMAIL]
-      );
-      this.props.createNewTour(newVal, descriptionVal);
-    }
 
-    this.setState({ selectedTour: null, showModal: false, ctxAction: CtxAction.NA });
+      if (!this.disposed) this.setState({ selectedTour: null, showModal: false, ctxAction: CtxAction.NA });
+    } catch {
+      message.error('The operation could not be confirmed. Your input is retained. Review your demos before trying again.');
+    } finally {
+      this.modalRequestPending = false;
+      if (!this.disposed) this.setState({ modalSaving: false });
+    }
   };
 
   handleRenameOrDuplicateOrCreateTourFormSubmit = (e: React.FormEvent): void => {
@@ -701,6 +730,7 @@ class Tours extends React.PureComponent<IProps, IOwnStateProps> {
   };
 
   handleModalCancel = (): void => {
+    if (this.modalRequestPending) return;
     this.setState({ selectedTour: null, showModal: false, ctxAction: CtxAction.NA });
   };
 
@@ -912,7 +942,7 @@ class Tours extends React.PureComponent<IProps, IOwnStateProps> {
                   intent="secondary"
                   onClick={this.handleModalCancel}
                   style={{ flex: 1 }}
-                  disabled={this.state.exportingDemo}
+                  disabled={this.state.exportingDemo || this.state.modalSaving}
                 >
                   Cancel
                 </Button>
@@ -920,6 +950,7 @@ class Tours extends React.PureComponent<IProps, IOwnStateProps> {
                   <Button
                     style={{ flex: 1 }}
                     onClick={this.handleModalOk}
+                    disabled={this.state.modalSaving}
                   >
                     Save
                   </Button>

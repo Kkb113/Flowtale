@@ -1,6 +1,6 @@
 import React, { RefObject, useEffect, useRef, useState } from 'react';
 import { DeleteOutlined, LinkOutlined, ReloadOutlined, SaveOutlined, UploadOutlined } from '@ant-design/icons';
-import { Tabs, Tooltip } from 'antd';
+import { Alert, Button, Tabs, Tooltip } from 'antd';
 import { ITourLoaderData } from '@fable/common/dist/types';
 import { GlobalPropsPath, createGlobalProperty, createLiteralProperty } from '@fable/common/dist/utils';
 import * as Tags from './styled';
@@ -23,7 +23,6 @@ interface Props {
   closeEditor: () => void,
   recordLoaderData: (tour: P_RespTour, loader: ITourLoaderData) => void,
   isAutoSaving: boolean;
-  startAutosavingLoader: () => void;
   featureForPlan: FeatureForPlan | null;
   subs: P_RespSubscription | null;
 }
@@ -35,8 +34,27 @@ function LoaderEditor(props: Props): JSX.Element {
   const [isLogoUrlChanged, setIsLogoUrlChanged] = useState(false);
   const [inputHelpText, setInputHelpText] = useState(false);
   const [loaderText, setLoaderText] = useState(props.data.loadingText._val);
+  const [saveError, setSaveError] = useState('');
+  const [uploadError, setUploadError] = useState('');
   const logoLinkIpRef = useRef<HTMLInputElement>();
   const initialLogoLink = useRef('');
+
+  const persist = (): void => {
+    try {
+      props.recordLoaderData(props.tour, loaderData);
+      setSaveError('');
+    } catch {
+      setSaveError('Your loader changes could not be retained in browser storage. Keep this editor open and retry.');
+    }
+  };
+
+  const uploadAsset = async (file: File): Promise<Awaited<ReturnType<typeof uploadImgFileObjectToAws>> | null> => {
+    setUploadError('');
+    try { return await uploadImgFileObjectToAws(file); } catch {
+      setUploadError('The file could not be uploaded. Your existing loader is unchanged. Select the file to retry.');
+      return null;
+    }
+  };
 
   useEffect(() => {
     initialLogoLink.current = props.data.logo.url._val;
@@ -44,8 +62,7 @@ function LoaderEditor(props: Props): JSX.Element {
 
   useEffect(() => {
     if (JSON.stringify(props.data) !== JSON.stringify(loaderData)) {
-      props.startAutosavingLoader();
-      props.recordLoaderData(props.tour, loaderData);
+      persist();
     }
     if ((loaderData.logo.url._val !== initialLogoLink.current) && (loaderData.logo.url._val !== DEFAULT_LOGO_URL)) {
       setIsLogoUrlChanged(true);
@@ -56,8 +73,7 @@ function LoaderEditor(props: Props): JSX.Element {
     if (e.target.files) {
       const file = e.target.files[0];
       if (file) {
-        props.startAutosavingLoader();
-        const fileUrl = await uploadImgFileObjectToAws(e.target.files[0]);
+        const fileUrl = await uploadAsset(e.target.files[0]);
         if (!fileUrl) return;
         setLoaderData(prev => ({ ...prev, loader: { url: fileUrl.cdnUrl, type } }));
       }
@@ -85,9 +101,26 @@ function LoaderEditor(props: Props): JSX.Element {
             >
               <SaveOutlined style={{ color: '#8A8A8A', fontSize: '1.45rem' }} />
             </div>
-            <Tags.CloseIcon alt="" src={CloseIcon} onClick={props.closeEditor} />
+            <Tags.CloseIcon
+              alt="Close loader editor"
+              src={CloseIcon}
+              onClick={() => {
+                if (!saveError) props.closeEditor();
+              }}
+            />
           </div>
         </Tags.Header>
+        {saveError && <Alert
+          type="error"
+          role="alert"
+          message={saveError}
+          action={<Button onClick={persist}>Retry saving</Button>}
+        />}
+        {uploadError && <Alert type="error" role="alert" message={uploadError} />}
+        {props.isAutoSaving && !saveError && <Alert
+          type="info"
+          message="Loader changes are retained in this browser until saved. If saving fails, close this panel to review unsaved changes in the editor."
+        />}
         <Tags.HeaderTitle className="typ-h1">Design your loader </Tags.HeaderTitle>
         <Tags.EditorCon>
           <Tags.PreviewPanel>
@@ -125,8 +158,7 @@ function LoaderEditor(props: Props): JSX.Element {
                                 if (e.target.files) {
                                   const file = e.target.files[0];
                                   if (file) {
-                                    props.startAutosavingLoader();
-                                    const fileUrl = await uploadImgFileObjectToAws(e.target.files[0]);
+                                    const fileUrl = await uploadAsset(e.target.files[0]);
                                     if (!fileUrl) return;
                                     setLoaderData(prev => ({ ...prev, logo: { url: createLiteralProperty(fileUrl.cdnUrl) } }));
                                     if (logoLinkIpRef.current) logoLinkIpRef.current.value = fileUrl.cdnUrl;
@@ -287,10 +319,13 @@ function LoaderEditor(props: Props): JSX.Element {
                       onFocus={(e) => {
                         setInputHelpText(true);
                       }}
-                      onChange={(e) => setLoaderText(e.target.value as string)}
+                      onChange={(e) => {
+                        const value = e.target.value;
+                        setLoaderText(value);
+                        setLoaderData(prev => ({ ...prev, loadingText: createLiteralProperty(value) }));
+                      }}
                       onBlur={(e) => {
                         setInputHelpText(false);
-                        setLoaderData(prev => ({ ...prev, loadingText: createLiteralProperty(loaderText) }));
                       }}
                     />
                     {inputHelpText && (
@@ -300,7 +335,7 @@ function LoaderEditor(props: Props): JSX.Element {
                         margin: '0.5rem',
                         opacity: '0.6'
                       }}
-                    >Click outside to preview changed text
+                    >Changes appear in the preview as you type
                     </div>
                     )}
                   </div>

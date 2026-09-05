@@ -8,7 +8,7 @@ import { ArrowRightOutlined,
   LoadingOutlined,
   WalletFilled
 } from '@ant-design/icons';
-import { Modal } from 'antd';
+import { Modal, message } from 'antd';
 import api from '@fable/common/dist/api';
 import raiseDeferredError from '@fable/common/dist/deferred-error';
 import { sleep } from '@anthropic-ai/sdk/core';
@@ -30,9 +30,9 @@ import { mapPlanIdAndIntervals } from '../../utils';
 import BuyMoreCredit from '../../component/create-tour/buy-more-credit';
 import { AMPLITUDE_EVENTS } from '../../amplitude/events';
 
-const { confirm } = Modal;
+import { getBillingInstance } from '../../billing-sdk';
 
-declare const Chargebee: any;
+const { confirm } = Modal;
 
 const mapDispatchToProps = (dispatch: any) => ({
   checkout: (
@@ -84,10 +84,6 @@ class UserManagementAndSubscription extends React.PureComponent<IProps, IOwnStat
 
   componentDidMount(): void {
     document.title = this.props.title;
-
-    Chargebee.init({
-      site: process.env.REACT_APP_CHARGEBEE_SITE,
-    });
   }
 
   // eslint-disable-next-line class-methods-use-this
@@ -99,16 +95,21 @@ class UserManagementAndSubscription extends React.PureComponent<IProps, IOwnStat
   };
 
   // eslint-disable-next-line class-methods-use-this
-  openCheckout = (planDetails?: {
+  openCheckout = async (planDetails?: {
     planId: 'solo' | 'startup' | 'business' | 'lifetime',
     interval: 'monthly' | 'annual'
   }, fn?: () => void) => {
-    const cbInstance = Chargebee.getInstance();
+    let cbInstance;
+    try { cbInstance = await getBillingInstance(); } catch (error) {
+      message.error(error instanceof Error ? error.message : 'Billing is unavailable. Please retry.');
+      return;
+    }
     const details = planDetails ? mapPlanIdAndIntervals(planDetails.planId, planDetails.interval) : undefined;
     cbInstance.openCheckout({
       hostedPage() {
         return api<ReqSubscriptionInfo | undefined, null>('/genchckouturl', {
           method: 'POST',
+          auth: true,
           body: (details && details.interval && details.plan) ? {
             pricingPlan: details.plan,
             pricingInterval: details.interval
@@ -116,7 +117,7 @@ class UserManagementAndSubscription extends React.PureComponent<IProps, IOwnStat
         });
       },
       loaded() { },
-      error(e: Error) { raiseDeferredError(e); },
+      error() { message.error('Checkout could not open. Please retry.'); },
       close() {
         confirm({
           title: 'Billing Information',

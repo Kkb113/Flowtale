@@ -44,6 +44,7 @@ import {
 } from '@fable/common/dist/types';
 import { DEFAULT_BLUE_BORDER_COLOR } from '@fable/common/dist/constants';
 import { nanoid } from 'nanoid';
+import { draftAssetUrl } from '@fable/common/dist/draft-assets';
 import Handlebars from 'handlebars';
 import {
   AllEdits,
@@ -127,15 +128,27 @@ function getFileUris(
   isForExportedTour?: boolean,
   baseUrl?: string
 ): {editFileUri: URL, dataFileUri: URL} {
-  const screenAssetPath = isForExportedTour ? `${baseUrl}/root/srn/` : config.screenAssetPath;
+  if (!publishForTour && !isForExportedTour) {
+    return { dataFileUri: draftAssetUrl('screen', screen.rid, 'index.json'),
+      editFileUri: draftAssetUrl('screen', screen.rid, 'edits.json') };
+  }
+  const screenAssetPath = isForExportedTour ? `${baseUrl}/root/srn/`
+    : `${config.pubTourAssetPath}assets-${publishForTour!.assetPrefixHash}/${publishForTour!.pubDataFileName.replace(/_index\.json$/, '')}/screens/`;
   const assetPrefixHash = screen.assetPrefixHash;
-  const editFileName = publishForTour ? publishForTour.pubEditFileName : config.editFileName;
+  const editFileName = isForExportedTour && publishForTour ? publishForTour.pubEditFileName : config.editFileName;
   const dataFileName = config.dataFileName;
 
   const dataFileUri = new URL(`${screenAssetPath}${assetPrefixHash}/${dataFileName}`);
   const editFileUri = new URL(`${screenAssetPath}${assetPrefixHash}/${editFileName}?ts=${+new Date()}`);
 
   return { editFileUri, dataFileUri };
+}
+
+export function thumbnailUrl(thumbnail: string | undefined, commonPath: string, baseUrl?: string, data?: string): URL {
+  if (thumbnail && /^data:image\/(?:png|jpeg);base64,[A-Za-z0-9+/=]+$/.test(thumbnail)) return new URL(thumbnail);
+  if (data && /^data:image\/jpeg;base64,[A-Za-z0-9+/=]+$/.test(data)) return new URL(data);
+  if (thumbnail && /^https?:\/\//.test(thumbnail)) return new URL(thumbnail);
+  return new URL(`${commonPath}${thumbnail || getDefaultThumbnailHash()}`, baseUrl);
 }
 
 export function processRawScreenData(screen: RespScreen, config: RespCommonConfig, publishForTour?: RespDemoEntity, isForExportedTour?: boolean, baseUrl?: string): P_RespScreen {
@@ -148,10 +161,10 @@ export function processRawScreenData(screen: RespScreen, config: RespCommonConfi
     updatedAt: d,
     isRootScreen: screen.parentScreenId === 0,
     displayableUpdatedAt: getDisplayableTime(d),
-    urlStructured: screen.url === ''
-      ? new URL(`https://${screen.displayName.toLowerCase().trim().replace(/\W+/g, '-')}}.img.flbk.sharefable.com`)
+    urlStructured: !screen.url
+      ? new URL('https://screen.invalid/')
       : new URL(screen.url),
-    thumbnailUri: isForExportedTour ? new URL(`${config.commonAssetPath}${screen.thumbnail}`, baseUrl) : new URL(`${config.commonAssetPath}${screen.thumbnail}`),
+    thumbnailUri: thumbnailUrl(screen.thumbnail, config.commonAssetPath, baseUrl, screen.thumbnailData),
     dataFileUri,
     editFileUri,
     related: [],
@@ -160,27 +173,35 @@ export function processRawScreenData(screen: RespScreen, config: RespCommonConfi
 }
 
 export function groupScreens(screens: P_RespScreen[]): P_RespScreen[] {
-  const parentScreenMap: Record<number, P_RespScreen> = {};
-  for (const s of screens) {
-    if (s.isRootScreen) {
-      parentScreenMap[s.id] = s;
+  const byId = new Map(screens.map(screen => [screen.id, { ...screen, related: [] as P_RespScreen[] }]));
+  const roots = new Map<number, number>();
+  for (const screen of Array.from(byId.values())) {
+    const path: number[] = [];
+    const seen = new Set<number>();
+    let current = screen;
+    while (!roots.has(current.id) && !seen.has(current.id)) {
+      path.push(current.id);
+      seen.add(current.id);
+      const parent = byId.get(current.parentScreenId);
+      if (!parent || current.parentScreenId === 0) break;
+      current = parent;
     }
+    // A missing source remains selectable; malformed cycles get one stable group.
+    const root = roots.get(current.id) ?? (seen.has(current.id) && current.id !== path[path.length - 1]
+      ? Math.min(...path.slice(path.indexOf(current.id))) : current.id);
+    path.forEach(id => roots.set(id, root));
   }
-
-  for (const s of screens) {
-    if (s.isRootScreen) {
-      continue;
-    }
-    parentScreenMap[s.parentScreenId].related.push(s);
+  const groups = new Map<number, P_RespScreen>();
+  for (const screen of Array.from(byId.values())) {
+    const root = byId.get(roots.get(screen.id)!)!;
+    groups.set(root.id, root);
+    if (screen.id !== root.id) root.related.push(screen);
   }
-
-  const parentScreenArr: P_RespScreen[] = [];
-  for (const s of Object.values(parentScreenMap)) {
-    s.related.sort((m, n) => +n.updatedAt - +m.updatedAt);
-    s.numUsedInTours = s.related.length;
-    parentScreenArr.push(s);
+  for (const group of Array.from(groups.values())) {
+    group.related.sort((a, b) => +b.updatedAt - +a.updatedAt);
+    group.numUsedInTours = group.related.length;
   }
-  return parentScreenArr.sort((m, n) => +n.updatedAt - +m.updatedAt);
+  return Array.from(groups.values()).sort((a, b) => +b.updatedAt - +a.updatedAt);
 }
 
 /* ************************************************************************* */
@@ -221,6 +242,7 @@ function getDataFileUri(
   isForExportedTour?: boolean,
   baseUrl?: string
 ): URL {
+  if (!publishForTour && !isForExportedTour) return draftAssetUrl('tour', tour.rid, 'index.json');
   const tourAssetPath = isForExportedTour ? `${baseUrl}/root/tour/` : config.tourAssetPath;
   const assetPrefixHash = tour.assetPrefixHash;
   const dataFileName = publishForTour
@@ -239,6 +261,7 @@ function getLoaderFileUri(
   isForExportedTour?: boolean,
   baseUrl?: string,
 ): URL {
+  if (!publishForTour && !isForExportedTour) return draftAssetUrl('tour', tour.rid, 'loader.json');
   const tourAssetPath = isForExportedTour ? `${baseUrl}/root/tour/` : config.tourAssetPath;
   const assetPrefixHash = tour.assetPrefixHash;
   const loaderFileName = publishForTour ? publishForTour.pubLoaderFileName : config.loaderFileName;
@@ -254,6 +277,7 @@ function getEditFileUri(
   isForExportedTour?: boolean,
   baseUrl?: string
 ): URL {
+  if (!publishForTour && !isForExportedTour) return draftAssetUrl('tour', tour.rid, 'edits.json');
   const tourAssetPath = isForExportedTour ? `${baseUrl}/root/tour/` : config.tourAssetPath;
   const assetPrefixHash = tour.assetPrefixHash;
   const editFileName = publishForTour ? publishForTour.pubEditFileName : config.editFileName;
@@ -282,7 +306,7 @@ export function processRawTourData(
   const loaderFileUri = getLoaderFileUri(tour, config, publishForTour, isForExportedTour, baseUrl);
   const editFileUri = getEditFileUri(tour, config, publishForTour, isForExportedTour, baseUrl);
   const site = processBrandData(normalizeBackwardCompatibilityForBrandData(tour, globalOpts), globalOpts);
-  const thumbnailHash = tour.info ? tour.info.thumbnail : getDefaultThumbnailHash();
+  const thumbnailHash = tour.info?.thumbnail || getDefaultThumbnailHash();
   const info = normalizeBackwardCompatibilityForEntityInfo(tour.info);
 
   const processedDatasets = tour.datasets?.map(ds => processRawDataset(ds, config, tour.owner, false, null, isForExportedTour, baseUrl));
@@ -293,7 +317,7 @@ export function processRawTourData(
     createdAt: new Date(tour.createdAt),
     updatedAt: d,
     lastPublishedDate: tour.lastPublishedDate && new Date(tour.lastPublishedDate),
-    thumbnailUri: isForExportedTour ? new URL(`${config.commonAssetPath}${thumbnailHash}`, baseUrl) : new URL(`${config.commonAssetPath}${thumbnailHash}`),
+    thumbnailUri: thumbnailUrl(thumbnailHash, config.commonAssetPath, baseUrl, tour.info?.thumbnailData),
     displayableUpdatedAt: getDisplayableTime(d),
     dataFileUri,
     loaderFileUri,
@@ -512,31 +536,25 @@ const isGlobalEditToBeRemoved = (
   }
 };
 
-export function mergeEdits(master: AllEdits<ElEditType>, incomingEdits: AllEdits<ElEditType>): AllEdits<ElEditType> {
-  for (const path of Object.keys(incomingEdits)) {
-    if (!(path in master)) {
-      master[path] = incomingEdits[path];
+// Pending journals retain deletion markers until they are applied to the acknowledged file.
+// Neither merging nor a failed network request may mutate that acknowledged snapshot.
+export function mergeEdits(
+  master: AllEdits<ElEditType>,
+  incomingEdits: AllEdits<ElEditType>,
+  preserveDeletions = false
+): AllEdits<ElEditType> {
+  const merged = deepcopy(master);
+  for (const [path, perElement] of Object.entries(incomingEdits)) {
+    const edits = { ...merged[path] };
+    for (const [key, value] of Object.entries(perElement)) {
+      const type = +key as ElEditType;
+      if (!preserveDeletions && isEditToBeRemoved(type, value)) delete edits[type];
+      else edits[type] = deepcopy(value);
     }
-
-    if (path in master) {
-      const perElEdit = incomingEdits[path];
-      for (const editType of Object.keys(perElEdit)) {
-        if (isEditToBeRemoved(+editType as ElEditType, perElEdit[+editType as ElEditType]!)) {
-          delete master[path][+editType as ElEditType];
-        } else {
-          master[path][+editType as ElEditType] = perElEdit[+editType as ElEditType];
-        }
-      }
-    } else {
-      master[path] = incomingEdits[path];
-    }
-    const isMasterPathEmpty = Object.keys(master[path]).length === 0;
-    if (isMasterPathEmpty) {
-      delete master[path];
-    }
+    if (Object.keys(edits).length) merged[path] = edits;
+    else delete merged[path];
   }
-
-  return master;
+  return merged;
 }
 
 export type GlobalEditsData = AllGlobalElEdits<ElEditType>
@@ -544,31 +562,20 @@ export type GlobalEditsData = AllGlobalElEdits<ElEditType>
 export function mergeGlobalEdits(
   master: GlobalEditsData,
   incomingEdits: GlobalEditsData,
+  preserveDeletions = false
 ): GlobalEditsData {
-  for (const path of Object.keys(incomingEdits)) {
-    if (!(path in master)) {
-      master[path] = incomingEdits[path];
+  const merged = deepcopy(master);
+  for (const [path, perElement] of Object.entries(incomingEdits)) {
+    const edits = { ...merged[path] };
+    for (const [key, value] of Object.entries(perElement)) {
+      const type = +key as ElEditType;
+      if (!preserveDeletions && isGlobalEditToBeRemoved(value)) delete edits[type];
+      else edits[type] = deepcopy(value);
     }
-    if (path in master) {
-      const perElEdit = incomingEdits[path];
-      for (const editType of Object.keys(perElEdit)) {
-        if (isGlobalEditToBeRemoved(perElEdit[+editType as ElEditType]!)) {
-          delete master[path][+editType as ElEditType];
-        } else {
-          master[path][+editType as ElEditType] = perElEdit[+editType as ElEditType];
-        }
-      }
-    } else {
-      master[path] = incomingEdits[path];
-    }
-
-    const isMasterPathEmpty = Object.keys(master[path]).length === 0;
-    if (isMasterPathEmpty) {
-      delete master[path];
-    }
+    if (Object.keys(edits).length) merged[path] = edits;
+    else delete merged[path];
   }
-
-  return master;
+  return merged;
 }
 
 export function localToRemoteAnnotationConfig(lc: IAnnotationConfig): IAnnotationOriginConfig {
@@ -999,8 +1006,9 @@ export const convertGlobalElEditToTuple = (
         globalEditItem.newBlurValue,
         globalEditItem.oldFilterPropertyValue,
         globalEditItem.newFilterPropertyValue,
-        globalEditItem.fid
+        globalEditItem.fid,
       ];
+      if (globalEditItem.redactionRect) tupleEditItem.push(globalEditItem.redactionRect);
       return tupleEditItem;
     }
 
@@ -1011,6 +1019,7 @@ export const convertGlobalElEditToTuple = (
         globalEditItem.newValue,
         globalEditItem.fid,
       ];
+      if (globalEditItem.redactionRect) tupleEditItem.push(globalEditItem.redactionRect);
       return tupleEditItem;
     }
 
@@ -1021,6 +1030,7 @@ export const convertGlobalElEditToTuple = (
         globalEditItem.oldStyle,
         globalEditItem.fid,
       ];
+      if (globalEditItem.redactionRect) tupleEditItem.push(globalEditItem.redactionRect);
       return tupleEditItem;
     }
 
@@ -1092,6 +1102,7 @@ export const convertTupleToGlobalElEdit = <K extends keyof EditValueEncoding>(
         newBlurValue: editItem[IdxEncodingTypeBlur.NEW_BLUR_VALUE],
         oldFilterPropertyValue: editItem[IdxEncodingTypeBlur.OLD_FILTER_VALUE],
         newFilterPropertyValue: editItem[IdxEncodingTypeBlur.NEW_FILTER_VALUE],
+        redactionRect: editItem[IdxEncodingTypeBlur.REDACTION_RECT],
         fid: editItem[IdxEncodingTypeBlur.FID],
         srnId,
       };
@@ -1106,6 +1117,7 @@ export const convertTupleToGlobalElEdit = <K extends keyof EditValueEncoding>(
         oldValue: editItem[IdxEncodingTypeDisplay.OLD_VALUE],
         newValue: editItem[IdxEncodingTypeDisplay.NEW_VALUE],
         fid: editItem[IdxEncodingTypeDisplay.FID],
+        redactionRect: editItem[4],
         srnId,
       };
       return globalEditItem;
@@ -1119,6 +1131,7 @@ export const convertTupleToGlobalElEdit = <K extends keyof EditValueEncoding>(
         oldStyle: editItem[IdxEncodingTypeMask.OLD_STYLE],
         newStyle: editItem[IdxEncodingTypeMask.NEW_STYLE],
         fid: editItem[IdxEncodingTypeMask.FID],
+        redactionRect: editItem[4],
         srnId,
       };
       return globalEditItem;
@@ -1422,7 +1435,7 @@ export function processRawDemoHubData(
   return {
     ...demoHub,
     info,
-    thumbnailUri: new URL(`${config.commonAssetPath}${thumbnailHash}`),
+    thumbnailUri: thumbnailUrl(thumbnailHash, config.commonAssetPath, undefined, demoHub.info?.thumbnailData),
     displayableUpdatedAt: getDisplayableTime(d),
     configFileUri: dataFileUri,
   };
@@ -1579,6 +1592,7 @@ function normalizeBackwardCompatibilityDemoHubConfig(demoHub : IDemoHubConfig) :
 }
 
 function getDHConfigFileUri(dh: RespDemoEntity, config: RespCommonConfig, publishForTour?: RespDemoEntity): URL {
+  if (!publishForTour) return draftAssetUrl('hub', dh.rid, 'index.json');
   const tourAssetPath = config.demoHubAssetPath;
   const assetPrefixHash = dh.assetPrefixHash;
   const dataFileName = publishForTour

@@ -2,32 +2,16 @@ import { SerNode } from '@fable/common/dist/types';
 import { nanoid } from 'nanoid';
 import raiseDeferredError from '@fable/common/dist/deferred-error';
 import { getUrlsFromSrcset } from '@fable/common/dist/utils';
-import { captureException } from '@sentry/react';
+import { dataCdnBaseUrl } from '../../../data-cdn';
 import { DeSerProps } from '../preview';
-import { addPointerEventsAutoToEl, isHTTPS } from '../../../utils';
+import { addPointerEventsAutoToEl } from '../../../utils';
+
+import { CAPTURE_SANDBOX, applyCapturedInputState, isBlockedCaptureElement, isSafeCaptureAttribute,
+  sanitizeCapturedHtml, sanitizeCapturedSvg } from './captured-content-security';
 
 export const FABLE_CUSTOM_NODE = -1;
 
-export function purifySrcDoc(htmlStr: string): string {
-  try {
-    const parser = new DOMParser();
-    const doc = parser.parseFromString(htmlStr, 'text/html');
-    const scripts = doc.querySelectorAll('script');
-    scripts.forEach(script => script.remove());
-
-    let doctype = '';
-    if (doc.doctype) {
-      doctype = `<!DOCTYPE ${doc.doctype.name}>`;
-    }
-
-    // Serialize the cleaned DOM back to a string, including the DOCTYPE
-    const cleanedHtmlString = `${doctype}\n${doc.documentElement.outerHTML}`;
-    return cleanedHtmlString;
-  } catch (e) {
-    captureException(e);
-    return htmlStr;
-  }
-}
+export const purifySrcDoc = sanitizeCapturedHtml;
 
 export const deser = (
   serNode: SerNode,
@@ -40,6 +24,9 @@ export const deser = (
   shouldAddImgToAssetLoadingPromises: boolean = false,
 
 ): Node | null | undefined => {
+  if (serNode.type === Node.ELEMENT_NODE && isBlockedCaptureElement(serNode.name)) {
+    return doc.createComment(`blockedfid/${serNode.attrs['f-id'] || ''}`);
+  }
   const newProps: DeSerProps = {
     // For svg and all the child nodes of svg set a flag
     partOfSvgEl: props.partOfSvgEl | (serNode.name === 'svg' ? 1 : 0),
@@ -105,9 +92,10 @@ export const deser = (
 
     case FABLE_CUSTOM_NODE: {
       try {
-        const wrapper = document.createElement('div');
-        wrapper.innerHTML = serNode.props.content!;
+        const wrapper = doc.createElement('div');
+        wrapper.innerHTML = sanitizeCapturedSvg(serNode.props.content || '');
         node = wrapper.children[0];
+        if (!node) return doc.createComment('Empty captured SVG');
         node.setAttribute('f-id', serNode.attrs['f-id'] || nanoid());
       } catch (err) {
         raiseDeferredError(err as Error);
@@ -171,9 +159,7 @@ export const deser = (
           }
         } else if (serNode.name === 'select') {
           // For select node the value property need to be set after the child is attached
-          for (const [nodePropKey, nodePropValue] of Object.entries(serNode.props.nodeProps || {})) {
-            (node as any)[nodePropKey] = nodePropValue;
-          }
+          applyCapturedInputState(node as Element, serNode.props.nodeProps || {});
         }
       }
     }
@@ -190,7 +176,7 @@ function shouldReplaceSrcset(urlStrs: string): boolean {
     for (const urlStr of urls) {
       const url = new URL(urlStr);
       // We are checking if an url has been successfully proxied by fable
-      if (url.host !== process.env.REACT_APP_DATA_CDN!) {
+      if (!url.href.startsWith(`${dataCdnBaseUrl()}/`)) {
         return true;
       }
     }
@@ -211,9 +197,15 @@ export const createHtmlElement = (
   assetLoadingPromises: Promise<unknown>[],
   shouldAddImgToAssetLoadingPromises: boolean,
 ): Node => {
+  if (isBlockedCaptureElement(node.name)) return doc.createComment('Blocked captured element');
+  const elementName = node.name === 'object' ? 'iframe' : node.name;
   const el = props.partOfSvgEl
-    ? doc.createElementNS('http://www.w3.org/2000/svg', node.name)
-    : doc.createElement(node.name);
+    ? doc.createElementNS('http://www.w3.org/2000/svg', elementName)
+    : doc.createElement(elementName);
+  if (elementName === 'iframe') {
+    el.setAttribute('sandbox', CAPTURE_SANDBOX);
+    el.setAttribute('referrerpolicy', 'no-referrer');
+  }
 
   if (node.name === 'canvas') {
     const element = el as HTMLCanvasElement;
@@ -238,19 +230,8 @@ export const createHtmlElement = (
     el.addEventListener('submit', stopEventBehaviour);
   } else if (node.name === 'input') {
     el.addEventListener('click', stopEventBehaviour);
-  }
-
-  for (const [nodePropKey, nodePropValue] of Object.entries(node.props.nodeProps || {})) {
-    if (node.name === 'input' && node.attrs.type === 'file' && nodePropKey === 'value') {
-      (el as any)[nodePropKey] = '';
-      continue;
-    }
-    if (node.name === 'input' && node.attrs.type === 'text'
-      && nodePropKey === 'value' && (nodePropValue as string).length !== 0) {
-      (el as HTMLInputElement).setAttribute('value', nodePropValue as string);
-      continue;
-    }
-    (el as any)[nodePropKey] = nodePropValue;
+  } else if (node.name === 'a' || node.name === 'area') {
+    el.addEventListener('click', event => event.preventDefault());
   }
 
   let attrKey;
@@ -269,6 +250,8 @@ export const createHtmlElement = (
   for ([attrKey, attrValue] of Object.entries(node.attrs)) {
     try {
       if (attrsToSkip.includes(attrKey.toLowerCase())) continue;
+      if (!isSafeCaptureAttribute(elementName, attrKey, attrValue || '')) continue;
+      if (elementName === 'iframe' && ['sandbox', 'allow', 'allowfullscreen', 'referrerpolicy'].includes(attrKey.toLowerCase())) continue;
       if (node.name === 'iframe' && attrKey === 'loading') continue;
       /*
        * <iframe> <- a
@@ -304,15 +287,13 @@ export const createHtmlElement = (
         // Sometimes srcdoc might have script tag that brings additional script to the page
         // We delete all script tags from inside srcdoc
         const nAttrValue = purifySrcDoc(attrValue as string);
-        node.attrs[attrKey] = attrValue = nAttrValue;
-        el.setAttribute(attrKey, attrValue);
+        el.setAttribute(attrKey, nAttrValue);
       } else if (node.name === 'object' && attrKey === 'data') {
-        el.setAttribute(attrKey, '/aboutblankhtml5.html');
+        el.setAttribute('src', '/aboutblankhtml5.html');
       } else {
         if (node.name === 'a') {
           if (attrKey === 'href') {
-            // eslint-disable-next-line no-script-url
-            attrValue = 'javascript:;';
+            attrValue = '#';
           } else if (attrKey === 'target') continue;
         }
         // HOTFIX!
@@ -325,6 +306,8 @@ export const createHtmlElement = (
       // console.info(`[Stage=Deser] can't set attr key=${attrKey} value=${attrValue}`);
     }
   }
+
+  applyCapturedInputState(el, node.props.nodeProps || {});
 
   switch (version) {
     case '2023-07-27':

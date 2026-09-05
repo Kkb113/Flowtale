@@ -30,7 +30,9 @@ public class RespScreen extends ResponseBase {
     private String assetPrefixHash;
     private String displayName;
     private RespUser createdBy;
-    private String thumbnail;
+  private String thumbnail;
+  @com.sharefable.api.transport.OptionalPropInTS
+  private String thumbnailData;
     private String url;
     private String icon;
     private Boolean responsive;

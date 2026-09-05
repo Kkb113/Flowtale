@@ -1,6 +1,7 @@
 package com.sharefable.api.config;
 
 import com.amazonaws.client.builder.AwsClientBuilder;
+import com.amazonaws.ClientConfiguration;
 import com.amazonaws.services.s3.AmazonS3;
 import com.amazonaws.services.s3.AmazonS3ClientBuilder;
 import com.sharefable.api.common.AssetFilePath;
@@ -162,7 +163,11 @@ public class S3Config {
   }
 
   public AssetFilePath getQualifiedPathFor(AssetType type, String prefix, String filePath) {
-    AssetFilePath assetFilePath = switch (type) {
+    boolean draftDocument = (type == AssetType.Tour || type == AssetType.Screen || type == AssetType.DemoHub)
+      && java.util.Set.of("index.json", "edits.json", "loader.json", "publication-aliases.json").contains(filePath);
+    boolean sourceImage = type == AssetType.Screen && IMAGE_FILE_NAME.equals(filePath);
+    AssetFilePath assetFilePath = (draftDocument || sourceImage || type == AssetType.Common || type == AssetType.ProxyAsset)
+      ? getPrivateAssetFilePathWithCommonProps() : switch (type) {
       case PvtTourInputData, PvtTourLlmOpsAssets -> getPrivateAssetFilePathWithCommonProps();
       default -> getAssetFilePathWithCommonProps();
     };
@@ -185,13 +190,31 @@ public class S3Config {
     return buildClient(pvtAssetBucketRegion);
   }
 
+  @Bean
+  @Qualifier("presign")
+  AmazonS3 presignS3Client() {
+    return buildClient(region, StringUtils.isBlank(publicEndpoint) ? endpoint : publicEndpoint);
+  }
+
+  @Bean
+  @Qualifier("pvt-presign")
+  AmazonS3 privatePresignS3Client() {
+    return buildClient(pvtAssetBucketRegion, StringUtils.isBlank(publicEndpoint) ? endpoint : publicEndpoint);
+  }
+
   private AmazonS3 buildClient(String clientRegion) {
-    AmazonS3ClientBuilder builder = AmazonS3ClientBuilder.standard();
-    if (StringUtils.isBlank(endpoint)) {
+    return buildClient(clientRegion, endpoint);
+  }
+
+  private AmazonS3 buildClient(String clientRegion, String targetEndpoint) {
+    AmazonS3ClientBuilder builder = AmazonS3ClientBuilder.standard().withClientConfiguration(
+      new ClientConfiguration().withConnectionTimeout(10_000).withSocketTimeout(30_000)
+        .withRequestTimeout(60_000).withClientExecutionTimeout(120_000).withMaxErrorRetry(2));
+    if (StringUtils.isBlank(targetEndpoint)) {
       return builder.withRegion(clientRegion).build();
     }
     return builder
-      .withEndpointConfiguration(new AwsClientBuilder.EndpointConfiguration(endpoint, clientRegion))
+      .withEndpointConfiguration(new AwsClientBuilder.EndpointConfiguration(targetEndpoint, clientRegion))
       .withPathStyleAccessEnabled(true)
       .build();
   }

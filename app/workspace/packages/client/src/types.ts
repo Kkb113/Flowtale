@@ -5,6 +5,7 @@ import { RenameDemoHubResult } from './action/creator';
 import { Tx } from './container/tour-editor/chunk-sync-manager';
 import { P_RespScreen } from './entity-processor';
 import { Rect } from './component/base/hightligher-base';
+import type { RedactionRect } from './component/screen-editor/utils/redaction';
 
 export interface IAnnotationConfigWithLocation extends IAnnotationConfigWithScreenId {
   location: string;
@@ -32,6 +33,7 @@ export interface BaseGlobalElEdit {
   timeInSec: number,
   fid: string,
   srnId: number,
+  redactionRect?: RedactionRect,
 }
 
 export interface GlobalElEditText extends BaseGlobalElEdit {
@@ -99,6 +101,7 @@ export interface GlobalElEditBlur extends BaseGlobalElEdit {
   newBlurValue: number | null,
   oldFilterPropertyValue: string,
   newFilterPropertyValue: string | null,
+  redactionRect?: RedactionRect,
 }
 
 export type EncodingTypeBlur = [
@@ -108,6 +111,7 @@ export type EncodingTypeBlur = [
   oldFilterPropertyValue: string,
   newFilterPropertyValue: string | null,
   fid: string,
+  redactionRect?: RedactionRect,
 ];
 export const enum IdxEncodingTypeBlur {
   TIMESTAMP = 0,
@@ -116,6 +120,7 @@ export const enum IdxEncodingTypeBlur {
   OLD_FILTER_VALUE,
   NEW_FILTER_VALUE,
   FID,
+  REDACTION_RECT,
 }
 
 export interface GlobalElEditDisplay extends BaseGlobalElEdit {
@@ -123,7 +128,7 @@ export interface GlobalElEditDisplay extends BaseGlobalElEdit {
   oldValue: string,
   newValue: string | null,
 }
-export type EncodingTypeDisplay = [timeInSec: number, oldValue: string, newVal: string | null, fid: string];
+export type EncodingTypeDisplay = [timeInSec: number, oldValue: string, newVal: string | null, fid: string, redactionRect?: RedactionRect];
 export const enum IdxEncodingTypeDisplay {
   TIMESTAMP = 0,
   OLD_VALUE,
@@ -136,7 +141,7 @@ export interface GlobalElEditMask extends BaseGlobalElEdit {
   newStyle: string | null,
   oldStyle: string,
 }
-export type EncodingTypeMask = [timeInSec: number, newStyle: string | null, oldStyle: string, fid: string,];
+export type EncodingTypeMask = [timeInSec: number, newStyle: string | null, oldStyle: string, fid: string, redactionRect?: RedactionRect];
 export const enum IdxEncodingTypeMask {
   TIMESTAMP = 0,
   NEW_STYLE,

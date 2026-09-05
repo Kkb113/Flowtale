@@ -2,6 +2,7 @@ package com.sharefable.api.entity;
 
 import com.sharefable.api.common.ConfigEntityType;
 import com.sharefable.api.common.EntityConfigConfigType;
+import com.sharefable.api.common.EntityConfigTypeConverter;
 import com.sharefable.api.transport.GenerateTSDef;
 import io.hypersistence.utils.hibernate.type.json.JsonType;
 import jakarta.persistence.*;
@@ -34,6 +35,7 @@ public class EntityConfigKV extends EntityBase {
   @Enumerated(value = EnumType.STRING)
   private ConfigEntityType entityType;
 
+  @Convert(converter = EntityConfigTypeConverter.class)
   private EntityConfigConfigType configType;
 
   private String configKey;

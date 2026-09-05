@@ -1,3 +1,4 @@
+import { isDraftAssetUrl } from '@fable/common/dist/draft-assets';
 import {
   IAnnotationButton,
   IAnnotationButtonType,
@@ -15,6 +16,8 @@ import { sentryStartTransaction } from '@fable/common/dist/sentry';
 import { DEFAULT_BLUE_BORDER_COLOR } from '@fable/common/dist/constants';
 import raiseDeferredError from '@fable/common/dist/deferred-error';
 import { sleep } from '@fable/common/dist/utils';
+import { PrivateCaptureAssets } from './utils/private-capture-assets';
+import { isLocalDevelopment } from '../../local-development';
 import { P_RespScreen, P_RespTour } from '../../entity-processor';
 import {
   AnnotationPerScreen,
@@ -124,6 +127,8 @@ export default class ScreenPreviewWithEditsAndAnnotationsReadonly
 
   private annotationLCM: AnnotationLifecycleManager | null = null;
 
+  private readonly privateCaptureAssets = new PrivateCaptureAssets();
+
   private readonly embedFrameRef: React.RefObject<HTMLIFrameElement | null>;
 
   private frameLoadingPromises: Promise<unknown>[] = [];
@@ -173,6 +178,7 @@ export default class ScreenPreviewWithEditsAndAnnotationsReadonly
 
   // eslint-disable-next-line class-methods-use-this
   private addFontLinkToAnnContainer = (doc: Document, annotationFontFamily: string): void => {
+    if (isLocalDevelopment) return;
     const linkHref = `https://fonts.googleapis.com/css?family=${annotationFontFamily.replace(/\s+/g, '+')}`;
 
     const existingLinks = Array.from(
@@ -373,6 +379,7 @@ export default class ScreenPreviewWithEditsAndAnnotationsReadonly
   }
 
   componentWillUnmount(): void {
+    this.privateCaptureAssets.dispose();
     this.endBranchTransition();
     clearTimeout(this.timer);
     this.timer = 0;
@@ -899,7 +906,7 @@ export default class ScreenPreviewWithEditsAndAnnotationsReadonly
     this.setState({ currentAnn: goToAnnId });
     const { screenId: currScreenId } = getAnnotationByRefId(currAnnId, this.props.allAnnotationsForTour)!;
 
-    const currScreenData = this.props.allScreensData![currScreenId];
+    let currScreenData = this.props.allScreensData![currScreenId];
     const goToAnnConfig = getAnnotationByRefId(goToAnnId, this.props.allAnnotationsForTour)!;
 
     this.reachAnnotation('');
@@ -998,6 +1005,10 @@ export default class ScreenPreviewWithEditsAndAnnotationsReadonly
     try {
       const allEdits = combineAllEdits([...goToScreenEdits, ...this.props.globalEdits]);
       goToScreenData = applyEditsToSerDom(allEdits, goToScreenData);
+      if (isDraftAssetUrl(currScreen.dataFileUri.href, process.env.REACT_APP_API_ENDPOINT)) {
+        currScreenData = await this.privateCaptureAssets.document(currScreenData);
+        goToScreenData = await this.privateCaptureAssets.document(goToScreenData);
+      }
       const startTime = performance.now();
       const sentryTransaction = sentryStartTransaction('getAndApplyDiffsTx');
 
@@ -1077,7 +1088,10 @@ export default class ScreenPreviewWithEditsAndAnnotationsReadonly
     if (!this.props.areDiffsAppliedSrnMap!.get(this.props.screen.rid)) return;
     const screen = this.props.allScreens!
       .find(s => s.rid === rid)!;
-    const currScreenData = this.props.allScreensData![screen.id];
+    let currScreenData = this.props.allScreensData![screen.id];
+    if (isDraftAssetUrl(screen.dataFileUri.href, process.env.REACT_APP_API_ENDPOINT)) {
+      currScreenData = await this.privateCaptureAssets.document(currScreenData);
+    }
 
     const htmlEl = this.annotationLCM!.calcElFromPath('1')!;
 

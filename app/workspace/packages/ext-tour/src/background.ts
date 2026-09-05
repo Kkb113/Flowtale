@@ -2,16 +2,12 @@ import { sentryCaptureException, init as sentryInit } from "@fable/common/dist/s
 import { sleep, snowflake } from "@fable/common/dist/utils";
 import {
   SerDoc,
-  NODE_NAME,
-  ThemeStats,
-  ThemeBorderRadiusCandidatePerNode,
-  ThemeColorCandidatPerNode
+  ThemeStats
 } from "@fable/common/dist/types";
 import { AGGRESSIVE_BUFFER_PRESERVATION, getActiveTab, PURIFY_DOM_SERIALIZATION, SettingState } from "./common";
 import { Msg, MsgPayload } from "./msg";
 import {
   IExtStoredState,
-  IUser,
   RecordingStatus,
   ReqScreenResize,
   ReqScreenshotData,
@@ -20,13 +16,15 @@ import {
   ScriptInitRequiredData,
 } from "./types";
 import {
-  BATCH_SIZE,
-  isCrossOrigin,
   isMissingMessageReceiverError,
   isMissingTabError,
   isRecordableUrl
 } from "./utils";
 import { version } from "../package.json";
+import { handleCaptureRequest, retainCapture, pendingCaptures } from "./capture-transfer";
+
+import { captureFrameIds } from "./capture-frames";
+import { recordingReadiness } from "./recording-readiness";
 
 sentryInit("background", version);
 
@@ -40,6 +38,20 @@ const TABS_TO_TRACK = "app_update_listnr_for_tab_ids";
 const FRAMES_IN_TAB = "frames_in_tab";
 const SCREEN_DATA_FINISHED = "screen_data_finished";
 const SCREEN_STYLE_DATA = "screen_style_data";
+const SESSION = "recording_session";
+const EXPECTED = "recording_expected/";
+const RECOVERY = "recording_recovery";
+const LAST_SCREENSHOT = "recording_last_screenshot_at";
+interface CaptureExpectation { tabId: number; frames: number[]; styles: Record<string, ThemeStats> }
+interface RecordingSession { id: string; stopping: boolean }
+// All active-recording mutations share one queue. A failed write releases it, and raw
+// data remains durable until the complete transfer payload has been retained.
+let recordingQueue: Promise<unknown> = Promise.resolve();
+function mutateRecording<T>(operation: () => Promise<T>): Promise<T> {
+  const result = recordingQueue.then(operation);
+  recordingQueue = result.catch(() => undefined);
+  return result;
+}
 
 async function sendTabMessageIfListening(tabId: number, message: object): Promise<boolean> {
   try {
@@ -106,242 +118,124 @@ chrome.runtime.onMessageExternal.addListener(
   }
 );
 
-const LOCKS: Record<string, number> = {};
-async function acquireLock(key: string) {
-  return new Promise(resolve => {
-    const timer = setInterval(async () => {
-      const isLockAlreadyAcquired = LOCKS[key];
-      if (isLockAlreadyAcquired) {
-        // wait, until the lock is released
-      } else {
-        LOCKS[key] = 1;
-        clearTimeout(timer);
-        resolve(1);
-      }
-    }, 5);
-  });
+async function beginCapture(id: number, tabId: number): Promise<boolean> {
+  const stored = await chrome.storage.local.get([APP_RECORDING_STATE, EXPECTED + id]);
+  if (stored[EXPECTED + id]) return true;
+  if (stored[APP_RECORDING_STATE] !== RecordingStatus.Recording) return false;
+  await registerCapture(id, tabId);
+  return true;
 }
 
-async function releaseLock(key: string) {
-  delete LOCKS[key];
-}
-
-async function addFrameDataToProcessList(id: number, frameDataToProcess: FrameDataToBeProcessed): Promise<void> {
+async function registerCapture(id: number, tabId: number): Promise<void> {
+  const frames = await chrome.webNavigation.getAllFrames({ tabId }) || [];
+  const expected = captureFrameIds(frames);
+  if (!expected.includes(0)) throw new Error("The recorded page is no longer available");
+  const order: string[] = (await chrome.storage.local.get(FRAMES_TO_PROCESS_ORDER))[FRAMES_TO_PROCESS_ORDER] || [];
   const key = `${FRAMES_TO_PROCESS}/${id}`;
-  await acquireLock(key);
-  const allFramesToProcess = (await chrome.storage.local.get(key))[key] || [];
-  allFramesToProcess.push(frameDataToProcess);
-  await chrome.storage.local.set({
-    [key]: allFramesToProcess,
-  });
-  await releaseLock(key);
-
-  await acquireLock(FRAMES_TO_PROCESS_ORDER);
-  const framesToProcessOrder: string[] = (await chrome.storage.local.get(FRAMES_TO_PROCESS_ORDER))[FRAMES_TO_PROCESS_ORDER] || [];
-  if (framesToProcessOrder.indexOf(key) === -1) { framesToProcessOrder.push(key); }
-  await chrome.storage.local.set({
-    [FRAMES_TO_PROCESS_ORDER]: framesToProcessOrder
-  });
-  await releaseLock(FRAMES_TO_PROCESS_ORDER);
+  if (!order.includes(key)) order.push(key);
+  await chrome.storage.local.set({ [EXPECTED + id]: { tabId, frames: expected, styles: {} },
+    [key]: [],
+    [FRAMES_TO_PROCESS_ORDER]: order });
 }
 
-type TSessionFinish = "na" | "submit" | "skip";
-let timer: number = 0;
-chrome.storage.onChanged.addListener(async (changes, areaName) => {
-  if (areaName !== "local") return;
-  for (const [storageKey, { newValue: val }] of Object.entries(changes)) {
-    if (storageKey.startsWith(FRAMES_TO_PROCESS) && val) {
-      const framesInTab = (await chrome.storage.local.get(FRAMES_IN_TAB))[FRAMES_IN_TAB] || {};
-      const tVal = val as FrameDataToBeProcessed[];
-      let allFramesRecorded = false;
-      let isThumbnailCaptured = false;
-      let sessionFinishedType : TSessionFinish = "na";
-      const tabId = tVal[0].tabId;
-      const frames = ((framesInTab[tabId] || []) as number[]).reduce((s, n) => {
-        s[n] = 1;
-        return s;
-      }, {} as Record<number, number>);
-      for (const item of tVal) {
-        if (item.type === "thumbnail") {
-          isThumbnailCaptured = true;
-        } else if (item.type === "sigstop" || item.type === "sigskip") {
-          sessionFinishedType = item.type === "sigstop" ? "submit" : "skip";
-        } else {
-          delete frames[item.frameId];
+async function addFrameDataToProcessList(id: number, part: FrameDataToBeProcessed, style?: ThemeStats): Promise<void> {
+  const key = `${FRAMES_TO_PROCESS}/${id}`;
+  const stored = await chrome.storage.local.get([EXPECTED + id, key]);
+  const expected: CaptureExpectation | undefined = stored[EXPECTED + id];
+  // Ignore late messages after completion/discard and messages from another tab.
+  if (!expected || expected.tabId !== part.tabId || !expected.frames.includes(part.frameId)) return;
+  const parts: FrameDataToBeProcessed[] = stored[key] || [];
+  if (parts.some(value => value.type === part.type && value.frameId === part.frameId)) return;
+  parts.push(part);
+  if (style) expected.styles[part.frameId] = style;
+  await chrome.storage.local.set({ [key]: parts, [EXPECTED + id]: expected });
+  await finishIfReady();
+}
+
+function combineStyles(expectations: CaptureExpectation[]): ThemeStats {
+  const combined = { nodeColor: {}, nodeBorderRadius: {} } as ThemeStats;
+  for (const expected of expectations) {
+    for (const style of Object.values(expected.styles)) {
+      for (const name of ["nodeColor", "nodeBorderRadius"] as const) {
+        for (const [tag, values] of Object.entries(style[name] || {})) {
+          const tags = combined[name] as Record<string, Record<string, number>>;
+          if (!tags[tag]) tags[tag] = {};
+          for (const [value, count] of Object.entries(values)) tags[tag][value] = (tags[tag][value] || 0) + count;
         }
       }
-
-      if (sessionFinishedType === "na") {
-        return;
-      }
-
-      // This is a failsafe mechanism to end the recording once the sigstop signal is received and the system waits for
-      // 5 seconds from the last msg received but message from some frames are not yet received (apparently)
-      // This might happen if a frame gets deleted without reloading the page, hence FRAMES_IN_TAB never gets to know
-      // that a frame gets deleted from body. This is observed in ga sometimes
-      clearFinishTimer();
-      timer = setTimeout(finishAppRecording(storageKey, tVal, sessionFinishedType), 5000) as unknown as number;
-
-      allFramesRecorded = Object.keys(frames).length === 0;
-      if (!allFramesRecorded || !isThumbnailCaptured) {
-        return;
-      }
-
-      clearFinishTimer();
-      // TODO this timeout was added for the case where the last  screen (with sigstop) got
-      // finished before all the other screens. We wait for a while to get all the other data
-      // that are still getting populated. The proper way to fix this wold be to wait for all the
-      // frames data to be gathered.
-      await sleep(750);
-      finishAppRecording(storageKey, tVal, sessionFinishedType)();
     }
   }
-});
-
-function clearFinishTimer() {
-  if (timer) {
-    clearTimeout(timer);
-    timer = 0;
-  }
+  return combined;
 }
 
-function finishAppRecording(
-  storageKey: string,
-  tVal: Object,
-  sessionFinishedType: TSessionFinish
-): () => Promise<void> {
-  return async (): Promise<void> => {
-    const finishedScreens = (await chrome.storage.local.get(SCREEN_DATA_FINISHED))[SCREEN_DATA_FINISHED] || [];
-    const allRecordedScreenKeys: string[] = (await chrome.storage.local.get(FRAMES_TO_PROCESS_ORDER))[FRAMES_TO_PROCESS_ORDER] || [];
-    for (const key of allRecordedScreenKeys) {
-      if (key === storageKey) {
-        continue;
-      }
-      const screen = (await chrome.storage.local.get(key))[key];
-      if (!screen) {
-        continue;
-      }
-      finishedScreens.push(screen);
-    }
-    finishedScreens.push(tVal);
-    await Promise.all([
-      chrome.storage.local.remove(allRecordedScreenKeys.concat(storageKey)),
-      chrome.storage.local.set({
-        [FRAMES_TO_PROCESS_ORDER]: []
-      })
-    ]);
+async function openCapture(id: string): Promise<void> {
+  if (!(await pendingCaptures()).some(manifest => manifest.id === id)) throw new Error("This recording is already transferred");
+  // Registered content script handles navigation/load; injection at tab creation races the document.
+  await chrome.tabs.create({ url: `${APP_CLIENT_ENDPOINT}/preptour?capture=${encodeURIComponent(id)}` });
+}
 
-    await chrome.storage.local.set({
-      [SCREEN_DATA_FINISHED]: finishedScreens,
-    });
-    await chrome.storage.local.set({
-      [FRAMES_IN_TAB]: {},
-    });
+async function finishIfReady(keepCompleteOnly = false): Promise<void> {
+  const stored = await chrome.storage.local.get(null);
+  const session: RecordingSession | undefined = stored[SESSION];
+  if (!session?.stopping) return;
+  const order: string[] = stored[FRAMES_TO_PROCESS_ORDER] || [];
+  const complete = order.filter(key => recordingReadiness(stored[EXPECTED + key.split("/")[1]]?.frames, stored[key] || []).complete);
+  const incomplete = order.length - complete.length;
+  await chrome.storage.local.set({ [RECOVERY]: { total: order.length,
+    complete: complete.length,
+    message: incomplete ? `${incomplete} screen(s) are missing captured frames or a screenshot. Saved data is retained.`
+      : (!complete.length ? "No complete screens were captured. You can discard this recording and try again." : "") } });
+  if (!complete.length || (incomplete && !keepCompleteOnly)) return;
+  const manifest = await retainCapture(
+    complete.map(key => stored[key]),
+    combineStyles(complete.map(key => stored[EXPECTED + key.split("/")[1]])),
+    session.id
+  );
+  // Retain first, remove staging second. A worker restart in between reuses the same ID and checksum.
+  await clearActiveRecording();
+  await resetAppState();
+  await openCapture(manifest.id);
+  await sendRuntimeMessageIfListening({ type: Msg.RECORDING_CREATE_OR_DELETE_COMPLETED });
+}
 
-    try {
-      if (sessionFinishedType === "submit") {
-        const newTab = await chrome.tabs.create({
-          url: `${APP_CLIENT_ENDPOINT}/preptour`
-        });
-
-        await chrome.scripting.executeScript({
-          target: { tabId: newTab.id! },
-          files: ["client_content.js"],
-        });
-      } else {
-        await chrome.storage.local.remove(SCREEN_DATA_FINISHED);
-        await chrome.storage.local.remove(SCREEN_STYLE_DATA);
-      }
-    } catch (e) {
-      const debugData = await chrome.storage.local.get(null);
-      console.warn(">>> DEBUG DATA <<<", debugData);
-      throw e;
-    } finally {
-      await resetAppState();
-      await sendRuntimeMessageIfListening({
-        type: Msg.RECORDING_CREATE_OR_DELETE_COMPLETED,
-      });
-    }
-  };
+async function clearActiveRecording(): Promise<void> {
+  const stored = await chrome.storage.local.get(null);
+  const keys = Object.keys(stored).filter(key => key.startsWith(`${FRAMES_TO_PROCESS}/`) || key.startsWith(EXPECTED));
+  await chrome.storage.local.remove([...keys, FRAMES_TO_PROCESS_ORDER, SCREEN_DATA_FINISHED, SCREEN_STYLE_DATA, SESSION, RECOVERY, FRAMES_IN_TAB]);
 }
 
 async function resetAppState(): Promise<void> {
   const tabsThatWasBeingTracked = (await chrome.storage.local.get(TABS_TO_TRACK))[TABS_TO_TRACK] || {};
+  await chrome.storage.local.set({ [APP_RECORDING_STATE]: RecordingStatus.Idle, [TABS_TO_TRACK]: {} });
   await Promise.all([
     ...Object.keys(tabsThatWasBeingTracked).map(async (tabId) => {
       try {
-        await chrome.tabs.reload(+tabId);
+        await sendTabMessageIfListening(+tabId, { type: Msg.END_RECORDING });
+        clearLoadingIcon(+tabId);
       } catch (error) {
         if (!isMissingTabError(error)) throw error;
       }
-    }),
-    chrome.storage.local.set({
-      [APP_RECORDING_STATE]: RecordingStatus.Idle,
-      [TABS_TO_TRACK]: {},
     }),
   ]);
 }
 
 async function getPersistentExtState(): Promise<IExtStoredState> {
-  const identity = (await chrome.storage.local.get(APP_STATE_IDENTITY))[APP_STATE_IDENTITY] as IUser | undefined;
-  const recordingStatus = (await chrome.storage.local.get(APP_RECORDING_STATE))[APP_RECORDING_STATE]
-    || RecordingStatus.Idle;
-
-  return {
-    identity: identity || null,
-    recordingStatus,
-  };
+  const stored = await chrome.storage.local.get(null);
+  const order: string[] = stored[FRAMES_TO_PROCESS_ORDER] || [];
+  const complete = order.filter(key => recordingReadiness(stored[EXPECTED + key.split("/")[1]]?.frames, stored[key] || []).complete).length;
+  const active = !!stored[SESSION] || !!order.length || !!stored[SCREEN_DATA_FINISHED]?.length;
+  return { identity: stored[APP_STATE_IDENTITY] || null,
+    recordingStatus: active ? stored[APP_RECORDING_STATE] || RecordingStatus.Stopping : RecordingStatus.Idle,
+    recovery: { total: order.length, complete, message: stored[RECOVERY]?.message || "" },
+    pending: await pendingCaptures() };
 }
 
-async function processStyleInfo(newScreenStyle: ThemeStats) {
-  const storedScreenStyleData: ThemeStats = (await chrome.storage.local.get(SCREEN_STYLE_DATA))[SCREEN_STYLE_DATA]
-      || {};
-  const storedNodeColors: ThemeColorCandidatPerNode = storedScreenStyleData.nodeColor || {
-    [NODE_NAME.a]: {},
-    [NODE_NAME.button]: {},
-    [NODE_NAME.div]: {},
-  } as ThemeColorCandidatPerNode;
-
-  const newNodeColor: ThemeColorCandidatPerNode = newScreenStyle.nodeColor;
-  for (const [tag, colorMap] of Object.entries(newNodeColor)) {
-    let storedColorMap: Record<string, number>;
-
-    if (tag in storedNodeColors) storedColorMap = (storedNodeColors as any)[tag];
-    else storedColorMap = (storedNodeColors as any)[tag] = {};
-
-    for (const [color, occurrence] of Object.entries(colorMap)) {
-      if (color in storedColorMap) storedColorMap[color] += occurrence;
-      else storedColorMap[color] = occurrence;
-    }
-  }
-  storedScreenStyleData.nodeColor = storedNodeColors;
-
-  const storedNodeBorderRadius: ThemeBorderRadiusCandidatePerNode = storedScreenStyleData.nodeBorderRadius || {
-    [NODE_NAME.a]: {},
-    [NODE_NAME.button]: {},
-    [NODE_NAME.div]: {},
-  } as ThemeBorderRadiusCandidatePerNode;
-
-  const newNodeBorderRadius = newScreenStyle.nodeBorderRadius;
-  for (const [tag, borderRadiusMap] of Object.entries(newNodeBorderRadius)) {
-    let storedBrMap: Record<string, number>;
-
-    if (tag in storedNodeBorderRadius) storedBrMap = (storedNodeBorderRadius as any)[tag];
-    else storedBrMap = (storedNodeBorderRadius as any)[tag] = {};
-
-    for (const [br, occurrence] of Object.entries(borderRadiusMap)) {
-      if (br in storedBrMap) storedBrMap[br] += occurrence;
-      else storedBrMap[br] = occurrence;
-    }
-  }
-  storedScreenStyleData.nodeBorderRadius = storedNodeBorderRadius;
-
-  chrome.storage.local.set(
-    {
-      [SCREEN_STYLE_DATA]: storedScreenStyleData,
-    }
-  );
-}
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area !== "local" || !Object.keys(changes).some(key => key === APP_RECORDING_STATE || key === RECOVERY
+    || key === FRAMES_TO_PROCESS_ORDER || key.startsWith(`${FRAMES_TO_PROCESS}/`) || key.startsWith("fable/pending-capture/"))) return;
+  getPersistentExtState().then(state => sendRuntimeMessageIfListening({ type: Msg.RECORDING_STATE, data: state }))
+    .catch(() => console.warn("Recording status could not be refreshed"));
+});
 
 async function getDeviceAndTabDim() {
   const dim = {
@@ -421,25 +315,6 @@ function getFavourableScreenDimension(tab: chrome.tabs.Tab) {
   });
 }
 
-async function getAllCookies(): Promise<chrome.cookies.Cookie[]> {
-  let cookies: chrome.cookies.Cookie[] = [];
-  let hasErr = false;
-  try {
-    // Support for Cookies Having Independent Partitioned State
-    // https://developers.google.com/privacy-sandbox/cookies/chips
-    cookies = (await (chrome.cookies.getAll as any)({ partitionKey: {} })) as chrome.cookies.Cookie[];
-  } catch (err) {
-    hasErr = true;
-    sentryCaptureException(err as Error);
-  }
-
-  if (hasErr || cookies.length === 0) {
-    cookies = await chrome.cookies.getAll({});
-  }
-
-  return cookies;
-}
-
 /**
  * This is how auto stitching of screens works based on user interaction
  *
@@ -469,9 +344,7 @@ async function getAllCookies(): Promise<chrome.cookies.Cookie[]> {
  * monotonically increasing ids that can be out of order if they were generated inside 1ms. This id is passed back
  * and forth via messaging.
  */
-let lastTabCaptureImageData = "";
-chrome.runtime.onMessage.addListener(async (msg: MsgPayload<any>, sender) => {
-  let endMsg : "sigstop" | "sigskip" = "sigstop";
+async function handleMessage(msg: MsgPayload<any>, sender: chrome.runtime.MessageSender) {
   switch (msg.type) {
     case Msg.INIT: {
       const state = await getPersistentExtState();
@@ -532,25 +405,23 @@ chrome.runtime.onMessage.addListener(async (msg: MsgPayload<any>, sender) => {
 
     case Msg.TAKE_SCREENSHOT: {
       const tMsg = msg as MsgPayload<ReqScreenshotData>;
-      // Only take screenshot of the tab once
-      if (sender.frameId === 0) {
-        try {
-          // Sometime when the user is clicking on the page rapidly captureVisibleTab throws an error saying
-          // the quota is exceeded. In this case we pickup images from last capture. This image is stored in
-          // a local variable because the service worker won't get killed at that time
-          lastTabCaptureImageData = await chrome.tabs.captureVisibleTab();
-        } catch (e) {
-          console.warn("Error while capturing tab. Error", (e as Error).message);
-        } finally {
-          await addFrameDataToProcessList(tMsg.data.id, {
-            oid: tMsg.data.id,
+      if (sender.frameId === 0 && sender.tab?.id) {
+        // Serialize screenshots as well as frame writes. A failed/quota-limited screenshot
+        // stays missing; an image from a different interaction must never be substituted.
+        await mutateRecording(async () => {
+          const expected = (await chrome.storage.local.get(EXPECTED + tMsg.data.id))[EXPECTED + tMsg.data.id];
+          if (!expected || expected.tabId !== sender.tab!.id) return;
+          const tab = await chrome.tabs.get(sender.tab!.id!);
+          if (!tab.active || tab.windowId !== sender.tab!.windowId) throw new Error("The recorded tab is no longer visible");
+          const data = await chrome.tabs.captureVisibleTab(tab.windowId, { format: "png" });
+          await chrome.storage.local.set({ [LAST_SCREENSHOT]: Date.now() });
+          await addFrameDataToProcessList(tMsg.data.id, { oid: tMsg.data.id,
             frameId: 0,
-            tabId: sender.tab!.id!,
+            tabId: tab.id!,
             type: "thumbnail",
-            data: lastTabCaptureImageData,
-            interactionCtx: null,
-          });
-        }
+            data,
+            interactionCtx: null });
+        });
       }
       break;
     }
@@ -570,137 +441,130 @@ chrome.runtime.onMessage.addListener(async (msg: MsgPayload<any>, sender) => {
 
     case Msg.FRAME_SERIALIZATION_START: {
       const tMsg = msg as MsgPayload<ScreenSerStartData>;
-      const frameId = sender.frameId === undefined ? -1 : sender.frameId;
-      if (tMsg.data.eventType === "source") {
-        await sendTabMessageIfListening(
-          sender.tab!.id!,
-          { type: Msg.SERIALIZE_FRAME, data: { srcFrameId: frameId, id: tMsg.data.id } }
-        );
+      if (tMsg.data.eventType === "source" && sender.tab?.id) {
+        const accepted = await mutateRecording(() => beginCapture(tMsg.data.id, sender.tab!.id!));
+        if (accepted) {
+          await sendTabMessageIfListening(
+            sender.tab.id,
+            { type: Msg.SERIALIZE_FRAME, data: { srcFrameId: sender.frameId ?? -1, id: tMsg.data.id } }
+          );
+        }
       }
       break;
     }
 
     case Msg.FRAME_SERIALIZED: {
       const tMsg = msg as MsgPayload<ScreenSerDataFromCS>;
-      const frameId = sender.frameId === undefined ? -1 : sender.frameId;
-      await addFrameDataToProcessList(tMsg.data.id, {
-        frameId,
-        oid: tMsg.data.id,
-        tabId: sender.tab!.id!,
-        type: "serdom",
-        data: tMsg.data.serDoc,
-        interactionCtx: tMsg.data.interactionCtx,
-      });
-      // INFO This iterates some html elements to figure out what are the dominant color etc
-      //      It's made part of this message, that could lead to slowness of the page. As serialization and
-      //      style stats calculation are synchronous ops. If there is delay in page oeprations, we can completely
-      //      detached this calculation from frame serialization
-      await processStyleInfo(tMsg.data.screenStyle);
+      if (sender.tab?.id) {
+        await mutateRecording(() => addFrameDataToProcessList(tMsg.data.id, {
+          frameId: sender.frameId ?? -1,
+          oid: tMsg.data.id,
+          tabId: sender.tab!.id!,
+          type: "serdom",
+          data: tMsg.data.serDoc,
+          interactionCtx: tMsg.data.interactionCtx,
+        }, tMsg.data.screenStyle));
+      }
       break;
     }
 
     case Msg.RESET_STATE: {
-      await chrome.storage.local.clear();
-      await chrome.storage.local.set({ ONBOARDING_STATE: 1 });
+      // Reset is a recovery check, never a browser-wide storage wipe.
+      await mutateRecording(() => finishIfReady());
+      break;
+    }
+
+    case Msg.RECOVER_COMPLETE: {
+      await mutateRecording(() => finishIfReady(true));
+      break;
+    }
+
+    case Msg.OPEN_CAPTURE: {
+      await openCapture(msg.data.id);
       break;
     }
 
     case Msg.START_RECORDING: {
-      await resetAppState();
-      const recordingStarted = await startRecording();
-      await chrome.storage.local.set({
-        [APP_RECORDING_STATE]: recordingStarted ? RecordingStatus.Recording : RecordingStatus.Idle,
+      await mutateRecording(async () => {
+        const stored = await chrome.storage.local.get([SESSION, FRAMES_TO_PROCESS_ORDER, SCREEN_DATA_FINISHED]);
+        if (stored[SESSION] || stored[FRAMES_TO_PROCESS_ORDER]?.length || stored[SCREEN_DATA_FINISHED]?.length) {
+          throw new Error("Finish or discard the existing recording before starting another");
+        }
+        await resetAppState();
+        await chrome.storage.local.set({ [SESSION]: { id: crypto.randomUUID(), stopping: false } });
       });
+      try {
+        const recordingStarted = await startRecording();
+        if (!recordingStarted) throw new Error("Open a web page to start recording");
+        await chrome.storage.local.set({ [APP_RECORDING_STATE]: RecordingStatus.Recording });
+      } catch (error) {
+        await mutateRecording(async () => { await clearActiveRecording(); await resetAppState(); });
+        throw error;
+      }
       break;
     }
 
     case Msg.REINJECT_CONTENT_SCRIPT: {
-      const tab = await getActiveTab();
-      if (!(tab && tab.id)) {
-        throw new Error("Active tab not found. Are you focused on the browser?");
-      }
-      await injectContentScriptInCrossOriginFrames({ id: tab.id!, url: tab.url! });
+      if (!sender.tab?.id) return;
+      await mutateRecording(async () => {
+        const stored = await chrome.storage.local.get([APP_RECORDING_STATE, TABS_TO_TRACK]);
+        if (stored[APP_RECORDING_STATE] !== RecordingStatus.Recording || !stored[TABS_TO_TRACK]?.[sender.tab!.id!]) return;
+        const tab = await chrome.tabs.get(sender.tab!.id!);
+        await injectContentScriptInCrossOriginFrames({ id: tab.id!, url: tab.url! });
+      });
       break;
     }
 
     case Msg.DELETE_RECORDING: {
-      await chrome.storage.local.set({
-        [APP_RECORDING_STATE]: RecordingStatus.Deleting,
+      await mutateRecording(async () => {
+        await chrome.storage.local.set({ [APP_RECORDING_STATE]: RecordingStatus.Deleting });
+        await clearActiveRecording();
+        await resetAppState();
       });
-      endMsg = "sigskip";
+      await sendRuntimeMessageIfListening({ type: Msg.RECORDING_CREATE_OR_DELETE_COMPLETED });
+      break;
     }
 
-    // eslint-disable-next-line no-fallthrough
     case Msg.STOP_RECORDING: {
-      await chrome.storage.local.set({
-        [APP_RECORDING_STATE]: RecordingStatus.Stopping,
+      const ending = await mutateRecording(async () => {
+        const stored = await chrome.storage.local.get(SESSION);
+        const session: RecordingSession = stored[SESSION] || { id: crypto.randomUUID(), stopping: false };
+        if (session.stopping) { await finishIfReady(); return null; }
+        const tab = await getTabForRecordingStop();
+        if (!tab?.id) {
+          await chrome.storage.local.set({ [SESSION]: { ...session, stopping: true }, [APP_RECORDING_STATE]: RecordingStatus.Stopping });
+          await finishIfReady();
+          return null;
+        }
+        const id = snowflake();
+        await registerCapture(id, tab.id);
+        await chrome.storage.local.set({ [SESSION]: { ...session, stopping: true }, [APP_RECORDING_STATE]: RecordingStatus.Stopping });
+        await addFrameDataToProcessList(id, { frameId: 0,
+          oid: id,
+          tabId: tab.id,
+          type: "sigstop",
+          data: "",
+          interactionCtx: null });
+        // Chrome permits two screenshots per second. Delay the final *capture*, not
+        // completion, so its DOM and screenshot describe the same new interaction.
+        // Persisted timing also covers a worker restart between clicks and Stop.
+        const lastScreenshot = (await chrome.storage.local.get(LAST_SCREENSHOT))[LAST_SCREENSHOT] || 0;
+        await sleep(Math.max(0, Math.min(1100, 1100 - (Date.now() - lastScreenshot))));
+        return { id, tabId: tab.id };
       });
-      await stopRecording();
-      const tab = await getTabForRecordingStop();
-      if (!(tab && tab.id)) {
-        await chrome.storage.local.set({
-          [APP_RECORDING_STATE]: RecordingStatus.Idle,
-        });
-        break;
+      if (ending) {
+        await sendTabMessageIfListening(ending.tabId, { type: Msg.STOP_RECORDING, data: { id: ending.id } });
+        clearLoadingIcon(ending.tabId);
       }
-      const id = snowflake();
-      // this has to be the first message for us to know that messagw with the following id gonna be the last
-      // interaction
-      await addFrameDataToProcessList(id, {
-        frameId: 0,
-        oid: id,
-        tabId: tab.id!,
-        type: endMsg,
-        data: "",
-        interactionCtx: null,
-      });
-      await sendTabMessageIfListening(tab.id!, {
-        type: Msg.STOP_RECORDING,
-        data: { id }
-      });
-      clearLoadingIcon(tab.id!);
       break;
     }
 
     case Msg.CLIENT_CONTENT_INIT: {
-      if (!sender.tab) {
-        break;
+      // An already-open tab can still contain the previous extension script.
+      // Reload installs the acknowledged protocol; never discard data for an old receiver.
+      if (sender.tab?.id && new URL(sender.url || "about:blank").origin === new URL(APP_CLIENT_ENDPOINT).origin) {
+        await chrome.tabs.reload(sender.tab.id);
       }
-      const data = await chrome.storage.local.get(SCREEN_DATA_FINISHED);
-      const cookies = await getAllCookies();
-      const screenStyleData: ThemeStats = (await chrome.storage.local.get(SCREEN_STYLE_DATA))[SCREEN_STYLE_DATA] || {};
-
-      await chrome.tabs.sendMessage(sender.tab.id!, {
-        type: Msg.SAVE_TOTAL_SCREEN_COUNT_IN_EXCHANGE_DIV,
-        data: { totalScreenCount: data[SCREEN_DATA_FINISHED].length ?? 0 }
-      });
-
-      for (let i = 0; i < data[SCREEN_DATA_FINISHED].length; i += BATCH_SIZE) {
-        await chrome.tabs.sendMessage(sender.tab.id!, {
-          type: Msg.SAVE_SCREENS_DATA_IN_EXCHANGE_DIV,
-          data: { screensData: data[SCREEN_DATA_FINISHED].slice(i, i + BATCH_SIZE) || [] }
-        });
-      }
-
-      await chrome.tabs.sendMessage(sender.tab.id!, {
-        type: Msg.SAVE_COOKIES_DATA_IN_EXCHANGE_DIV,
-        data: { cookiesData: cookies }
-      });
-
-      await chrome.tabs.sendMessage(sender.tab.id!, {
-        type: Msg.SAVE_STYLE_DATA,
-        data: { screenStyleData }
-      });
-
-      await chrome.tabs.sendMessage(sender.tab.id!, {
-        type: Msg.SAVE_VERSION_DATA,
-        data: { version: "3" }
-      });
-
-      await chrome.tabs.sendMessage(sender.tab.id!, { type: Msg.SAVE_TOUR_DATA });
-
-      await chrome.storage.local.remove(SCREEN_DATA_FINISHED);
-      await chrome.storage.local.remove(SCREEN_STYLE_DATA);
       break;
     }
 
@@ -732,6 +596,23 @@ chrome.runtime.onMessage.addListener(async (msg: MsgPayload<any>, sender) => {
     default:
       break;
   }
+}
+
+chrome.runtime.onMessage.addListener((message, sender, respond) => {
+  if (["fable/CAPTURE_MANIFEST", "fable/CAPTURE_CHUNK", "fable/CAPTURE_ACK"].includes(message.type)) {
+    handleCaptureRequest(message, sender).then(respond).catch(error => respond({ error: error.message }));
+    return true;
+  }
+  if (sender.id !== chrome.runtime.id) return false;
+  const pageCommands = [Msg.INIT, Msg.WIN_RESIZE, Msg.RESET_STATE, Msg.START_RECORDING, Msg.STOP_RECORDING,
+    Msg.DELETE_RECORDING, Msg.RECOVER_COMPLETE, Msg.OPEN_CAPTURE, Msg.INIT_REGISTERED_CONTENT_SCRIPTS];
+  if (pageCommands.includes(message.type) && !sender.url?.startsWith(chrome.runtime.getURL(""))) return false;
+  handleMessage(message, sender).then(() => respond({ ok: true })).catch(async () => {
+    const error = "Recording could not finish this operation. Saved screens are retained; open the extension to recover them.";
+    await chrome.storage.local.set({ [RECOVERY]: { message: error } }).catch(() => undefined);
+    respond({ error });
+  });
+  return true;
 });
 
 function showLoadingIcon(tabId: number) {
@@ -762,14 +643,7 @@ async function injectContentScriptInCrossOriginFrames(tab: { id: number, url: st
   const framesInPage = (await chrome.webNavigation.getAllFrames({
     tabId: tab.id,
   })) || [];
-  const crossOriginFrameIds: Array<number> = [];
-  for (const frame of framesInPage) {
-    const crossOrigin = isCrossOrigin(tab.url || "", frame.url);
-    if (frame.frameId === 0 || crossOrigin) {
-      // Will inject content script to main frame (frameId==0) as well as all cross-origin frames
-      crossOriginFrameIds.push(frame.frameId);
-    }
-  }
+  const crossOriginFrameIds = captureFrameIds(framesInPage);
 
   const framesInTab = (await chrome.storage.local.get(FRAMES_IN_TAB))[FRAMES_IN_TAB] || {};
   framesInTab[`${tab.id}`] = crossOriginFrameIds;
@@ -803,7 +677,13 @@ function initRegisteredContentScripts() {
   const purifyDomScriptId = "fable/purifydom";
 
   chrome.scripting.getRegisteredContentScripts()
-    .then((scripts) => {
+    .then(async (scripts) => {
+      if (!scripts.some(script => script.id === "fable/capture-transfer")) {
+        await chrome.scripting.registerContentScripts([{ id: "fable/capture-transfer",
+          js: ["client_content.js"],
+          matches: [`${APP_CLIENT_ENDPOINT}/preptour*`],
+          runAt: "document_idle" }]);
+      }
       const scriptExists = scripts.find(script => script.id === drawingBufferScriptId);
       const purifyDomScriptExists = scripts.find(script => script.id === purifyDomScriptId);
 
@@ -825,6 +705,8 @@ function initRegisteredContentScripts() {
 initRegisteredContentScripts();
 
 async function onTabStateUpdate(tabId: number, info: chrome.tabs.TabChangeInfo) {
+  const state = (await chrome.storage.local.get(APP_RECORDING_STATE))[APP_RECORDING_STATE];
+  if (state !== RecordingStatus.Recording) return;
   const tabsToLookFor = (await chrome.storage.local.get(TABS_TO_TRACK))[TABS_TO_TRACK] || {};
   if (info.status === "complete" && tabId in tabsToLookFor) {
     const tab = await chrome.tabs.get(tabId);
@@ -839,6 +721,8 @@ async function onTabStateUpdate(tabId: number, info: chrome.tabs.TabChangeInfo) 
 }
 
 async function onTabActive(activeInfo: chrome.tabs.TabActiveInfo) {
+  const state = (await chrome.storage.local.get(APP_RECORDING_STATE))[APP_RECORDING_STATE];
+  if (state !== RecordingStatus.Recording) return;
   const tabsToLookFor = (await chrome.storage.local.get(TABS_TO_TRACK))[TABS_TO_TRACK] || {};
   if (activeInfo.tabId in tabsToLookFor) return;
 
@@ -882,8 +766,6 @@ async function startRecording(): Promise<boolean> {
     return false;
   }
 
-  chrome.tabs.onUpdated.addListener(onTabStateUpdate);
-  chrome.tabs.onActivated.addListener(onTabActive);
   await Promise.all([
     await chrome.storage.local.set({
       [TABS_TO_TRACK]: { [tab.id]: tab.url }
@@ -895,7 +777,14 @@ async function startRecording(): Promise<boolean> {
   return true;
 }
 
-async function stopRecording() {
-  chrome.tabs.onUpdated.removeListener(onTabStateUpdate);
-  chrome.tabs.onActivated.removeListener(onTabActive);
-}
+// Manifest V3 recreates this module after suspension. Register browser event listeners
+// synchronously on every worker start and use persisted recording state to gate work.
+chrome.tabs.onUpdated.addListener((tabId, info) => {
+  mutateRecording(() => onTabStateUpdate(tabId, info)).catch(() => console.warn("Could not prepare the recording tab; saved frames are retained"));
+});
+chrome.tabs.onActivated.addListener(info => {
+  mutateRecording(() => onTabActive(info)).catch(() => console.warn("Could not prepare the recording tab; saved frames are retained"));
+});
+
+// Resume an interrupted completion using durable expectations, without timeout-based acceptance.
+mutateRecording(() => finishIfReady()).catch(() => console.warn("Recording recovery is available in the extension"));

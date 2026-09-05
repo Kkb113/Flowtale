@@ -14,6 +14,8 @@ import lombok.*;
 @GenerateTSDef
 public class EntityInfo {
   private String thumbnail;
+  @OptionalPropInTS
+  private String thumbnailData;
   private FrameSettings frameSettings = FrameSettings.LIGHT;
   @OptionalPropInTS
   private boolean locked;

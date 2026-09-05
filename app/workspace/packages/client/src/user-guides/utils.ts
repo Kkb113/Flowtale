@@ -8,7 +8,6 @@ import {
   USER_GUIDE_LOCAL_STORE_KEY,
   UserGuideCustomPosition
 } from './types';
-import { insertAllUserGuides } from '.';
 
 export interface LocalStoreUserGuideProps {
   groupId: string;
@@ -25,19 +24,32 @@ export interface LocalStoreUserGuideProps {
 
 type LocalStoreUserGuide = Record<string, LocalStoreUserGuideProps>;
 
-const reinitializeLocalStorage = (): LocalStoreUserGuide => {
-  insertAllUserGuides();
-  const FABLE_USER_GUIDE = localStorage.getItem(USER_GUIDE_LOCAL_STORE_KEY);
-  return JSON.parse(FABLE_USER_GUIDE!);
-};
+// The app bootstrap registers guide definitions. Storage helpers must not import
+// that registry: guide components themselves depend on these helpers.
+let memoryGuides: LocalStoreUserGuide = {};
 
 const getFableUserGuide = (): LocalStoreUserGuide => {
-  const FABLE_USER_GUIDE = localStorage.getItem(USER_GUIDE_LOCAL_STORE_KEY);
-  return FABLE_USER_GUIDE ? JSON.parse(FABLE_USER_GUIDE) as LocalStoreUserGuide : reinitializeLocalStorage();
+  try {
+    const stored = localStorage.getItem(USER_GUIDE_LOCAL_STORE_KEY);
+    if (!stored) return memoryGuides;
+    const parsed = JSON.parse(stored);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return memoryGuides;
+    return Object.fromEntries(Object.entries(parsed).filter(([, value]) => (
+      !!value && typeof value === 'object' && typeof (value as LocalStoreUserGuideProps).id === 'string'
+    ))) as LocalStoreUserGuide;
+  } catch {
+    // Optional guide progress cannot prevent the editor from loading.
+    return memoryGuides;
+  }
 };
 
 const saveFableUserGuide = (userGuide: LocalStoreUserGuide): void => {
-  localStorage.setItem(USER_GUIDE_LOCAL_STORE_KEY, JSON.stringify(userGuide));
+  memoryGuides = userGuide;
+  try {
+    localStorage.setItem(USER_GUIDE_LOCAL_STORE_KEY, JSON.stringify(userGuide));
+  } catch {
+    // Guide progress remains available for this page when browser storage is unavailable.
+  }
 };
 
 const updateGuideProps = (
@@ -68,7 +80,10 @@ export const removeDeprecatedTours = (
 ): void => {
   const FABLE_USER_GUIDE = getFableUserGuide();
   const UPDATED_FABLE_USER_GUIDE: LocalStoreUserGuide = {};
-  guides.forEach(guide => UPDATED_FABLE_USER_GUIDE[guide.guideInfo.id] = FABLE_USER_GUIDE[guide.guideInfo.id]);
+  guides.forEach(guide => {
+    const existing = FABLE_USER_GUIDE[guide.guideInfo.id];
+    if (existing) UPDATED_FABLE_USER_GUIDE[guide.guideInfo.id] = existing;
+  });
   saveFableUserGuide(UPDATED_FABLE_USER_GUIDE);
 };
 
@@ -78,7 +93,7 @@ export const upsertFableUserGuide = (
   let FABLE_USER_GUIDE = getFableUserGuide();
 
   if (!FABLE_USER_GUIDE[guide.id]) {
-    FABLE_USER_GUIDE[guide.id] = guide;
+    FABLE_USER_GUIDE[guide.id] = { ...guide };
   } else {
     FABLE_USER_GUIDE = updateGuideProps(guide, FABLE_USER_GUIDE);
   }
@@ -90,7 +105,7 @@ export const insertFableUserGuide = (
   guides: { guideInfo: GuideInfo; component: (props: GuideProps) => JSX.Element }[]
 ): void => {
   const FABLE_USER_GUIDE: LocalStoreUserGuide = {};
-  guides.forEach(guide => FABLE_USER_GUIDE[guide.guideInfo.id] = guide.guideInfo);
+  guides.forEach(guide => FABLE_USER_GUIDE[guide.guideInfo.id] = { ...guide.guideInfo });
   saveFableUserGuide(FABLE_USER_GUIDE);
 };
 

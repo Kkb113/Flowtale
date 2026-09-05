@@ -34,7 +34,8 @@ public class RespUser extends ResponseBase {
     try {
       RespUser respUser = (RespUser) Utils.fromEntityToTransportObject(user);
       respUser.setPersonalEmail(user.getDomainBlacklisted());
-      respUser.setOrgs(user.getOrgs() != null ? user.getOrgs().stream().map(RespOrg::from).toList() : List.of());
+      respUser.setOrgs(user.getOrgs() != null ? user.getOrgs().stream()
+        .filter(org -> user.hasActiveMembership(org.getId())).map(RespOrg::from).toList() : List.of());
       return respUser;
     } catch (InstantiationException | IllegalAccessException | NoSuchMethodException |
              InvocationTargetException e) {

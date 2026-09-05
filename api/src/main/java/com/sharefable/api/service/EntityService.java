@@ -1,6 +1,7 @@
 package com.sharefable.api.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.sharefable.api.common.*;
 import com.sharefable.api.config.AppConfig;
 import com.sharefable.api.config.AppSettings;
@@ -31,6 +32,7 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 
 import java.net.URL;
+import java.io.IOException;
 import java.util.*;
 import java.util.concurrent.Callable;
 import java.util.stream.Collectors;
@@ -51,6 +53,8 @@ public class EntityService extends ServiceBase {
   private final ScreenRepo screenRepo;
   private final EntityConfigService entityConfigService;
   private final SubscriptionRepo subscriptionRepo;
+  private final PublicationLifecycle publicationLifecycle;
+  private final ProxyAssetDelivery proxyDelivery;
 
   @Autowired
   public EntityService(
@@ -61,7 +65,8 @@ public class EntityService extends ServiceBase {
     ScreenRepo screenRepo,
     ScreenService screenService,
     UserService userService, AppConfig appConfig,
-    EntityConfigService entityConfigService, SubscriptionRepo subscriptionRepo) {
+    EntityConfigService entityConfigService, SubscriptionRepo subscriptionRepo, PublicationLifecycle publicationLifecycle,
+    ProxyAssetDelivery proxyDelivery) {
     super(settings, s3Service, s3Config, screenRepo, demoEntityRepo);
     this.demoEntityRepo = demoEntityRepo;
     this.userRepo = userRepo;
@@ -74,6 +79,8 @@ public class EntityService extends ServiceBase {
     this.screenRepo = screenRepo;
     this.entityConfigService = entityConfigService;
     this.subscriptionRepo = subscriptionRepo;
+    this.publicationLifecycle = publicationLifecycle;
+    this.proxyDelivery = proxyDelivery;
   }
 
   @Transactional
@@ -121,10 +128,23 @@ public class EntityService extends ServiceBase {
       .build();
 
     DemoEntity storedDemoEntity = demoEntityRepo.save(demoEntity);
+    // Return the stored revision, including the database's timestamp precision.
+    // The in-memory insert timestamp can otherwise make the first guarded save conflict.
+    refreshPersisted(storedDemoEntity);
     List<EntityConfigKV> entityConfigKV = getEntityConfigKV(demoEntity.getBelongsToOrg());
     return RespDemoEntity.from(storedDemoEntity, entityConfigKV);
   }
 
+  @Transactional(readOnly = true)
+  public RespDemoEntity getDraftByRid(String rid, boolean shouldGetScreens, TopLevelEntityType type, User user) {
+    DemoEntity entity = demoEntityRepo.findByRid(rid)
+      .filter(value -> user.getBelongsToOrg() != null && value.getDeleted() == TourDeleted.ACTIVE && value.getEntityType() == type
+        && Objects.equals(value.getBelongsToOrg(), user.getBelongsToOrg()))
+      .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Not found"));
+    return getEntityByRid(entity.getRid(), shouldGetScreens, false, type);
+  }
+
+  /** Trusted service reads; browser callers must use getDraftByRid with a verified workspace user. */
   @Transactional(readOnly = true)
   public RespDemoEntity getEntityByRid(String rid, boolean shouldGetScreens, boolean shouldGetDeletedTour, TopLevelEntityType type) {
     List<TourWithConfig> maybeTourWithConfig = demoEntityRepo.findTourWithConfigByRidAndDeletedAndEntityType(
@@ -140,7 +160,8 @@ public class EntityService extends ServiceBase {
     }
 
     DemoEntity demoEntity = maybeTourWithConfig.get(0).getDemoEntity();
-    List<EntityConfigKV> entityConfigKVS = maybeTourWithConfig.stream().map(TourWithConfig::getEntityConfigKV).toList();
+    List<EntityConfigKV> entityConfigKVS = maybeTourWithConfig.stream().map(TourWithConfig::getEntityConfigKV)
+      .filter(Objects::nonNull).toList();
     if (shouldGetScreens && type != TopLevelEntityType.DEMO_HUB) {
       Set<Screen> screens = demoEntity.getScreens();
       demoEntity.setScreens(screens);
@@ -171,12 +192,13 @@ public class EntityService extends ServiceBase {
     demoEntity.setLastInteractedAt(Utils.getCurrentUtcTimestamp());
     demoEntity.setUpdatedAt(Utils.getCurrentUtcTimestamp());
     DemoEntity updatedDemoEntity = demoEntityRepo.save(demoEntity);
-    return RespDemoEntity.from(updatedDemoEntity);
+    return RespDemoEntity.from(refreshPersisted(updatedDemoEntity));
   }
 
   @Transactional
   public RespDemoEntity renameEntity(ReqRenameGeneric body, User userEntity, TopLevelEntityType type) {
-    DemoEntity demoEntity = getEntityByRIdWithAuthValidation(DemoEntity.class, body.rid(), userEntity);
+    DemoEntity demoEntity = getEntityForMutation(body.rid(), userEntity);
+    if (demoEntity.getEntityType() != type) throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Demo not found");
     String oldRid = demoEntity.getRid();
     String oldName = demoEntity.getDisplayName();
     String newName = body.newName();
@@ -190,34 +212,65 @@ public class EntityService extends ServiceBase {
     try {
       DemoEntity updatedDemoEntity = demoEntityRepo.save(demoEntity);
       if (demoEntity.getLastPublishedDate() != null) {
-        if (type == TopLevelEntityType.TOUR) {
-          uploadTourManifestToS3(updatedDemoEntity);
-        }
-        if (!isSame) modifyPublishedTourEntityPath(oldRid, updatedDemoEntity.getRid(), type);
+        publicationLifecycle.track(updatedDemoEntity, oldRid, updatedDemoEntity.getRid());
+        renamePublishedMetadata(oldRid, updatedDemoEntity, type);
       }
 
-      return RespDemoEntity.from(updatedDemoEntity);
+      return RespDemoEntity.from(refreshPersisted(updatedDemoEntity));
     } catch (Exception e) {
       log.error("Error while trying to publish tour", e);
       throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "Something went wrong while trying to rename the tour");
     }
   }
 
-  private void modifyPublishedTourEntityPath(String oldRid, String newRid, TopLevelEntityType type) {
+  void renamePublishedMetadata(String oldRid, DemoEntity renamed, TopLevelEntityType type) throws IOException {
     AssetFilePath fromPubTourEntityFile = s3Config.getQualifiedPathFor(
       type == TopLevelEntityType.TOUR ? S3Config.AssetType.PublishedTour : S3Config.AssetType.PublishedDemoHub,
       oldRid,
       S3Config.getEntityFiles().publishedTourEntityFile().filename());
     AssetFilePath toPubTourEntityFile = s3Config.getQualifiedPathFor(
       type == TopLevelEntityType.TOUR ? S3Config.AssetType.PublishedTour : S3Config.AssetType.PublishedDemoHub,
-      newRid,
+      renamed.getRid(),
       S3Config.getEntityFiles().publishedTourEntityFile().filename());
-    s3Service.copy(fromPubTourEntityFile, toPubTourEntityFile);
+    // Rename the existing publication; reading the draft here would publish unreviewed changes.
+    var stored = objectMapper.readTree(s3Service.getObjectContent(fromPubTourEntityFile));
+    if (!(stored instanceof ObjectNode response)) throw new IOException("Invalid published demo metadata");
+    ObjectNode published = PublicDemoMetadata.project(response);
+    ObjectNode data = (ObjectNode) published.get("data");
+    data.put("rid", renamed.getRid());
+    data.put("displayName", renamed.getDisplayName());
+    data.put("description", renamed.getDescription());
+    if (type == TopLevelEntityType.TOUR) {
+      // Use the published screen list, not the possibly newer draft's screens.
+      ObjectNode manifest = objectMapper.createObjectNode();
+      manifest.put("version", 1);
+      manifest.put("name", renamed.getDisplayName());
+      manifest.put("url", appConfig.getUrlForDemo() + "/" + renamed.getRid());
+      var assets = manifest.putArray("screenAssets");
+      for (var screen : data.path("screens")) {
+        String thumbnail = screen.path("thumbnail").asText("");
+        if (thumbnail.isBlank()) continue;
+        var asset = assets.addObject();
+        asset.put("name", screen.path("displayName").asText(""));
+        asset.put("url", screen.path("url").asText(""));
+        asset.put("thumbnail", thumbnail.startsWith("https://") || thumbnail.startsWith("http://")
+          ? thumbnail : data.path("cc").path("commonAssetPath").asText("") + thumbnail);
+        asset.set("icon", screen.path("icon"));
+      }
+      uploadDataFileToS3(objectMapper.writeValueAsString(manifest), renamed.getRid(),
+        S3Config.getEntityFiles().manifestFile(), S3Config.AssetType.PublishedTour);
+    }
+    uploadDataFileToS3(objectMapper.writeValueAsString(published), toPubTourEntityFile,
+      S3Config.getEntityFiles().publishedTourEntityFile());
   }
 
   @Transactional
   public RespDemoEntityWithSubEntities duplicateTour(ReqDuplicateTour body, User user) {
-    DemoEntity fromDemoEntity = getEntityByRIdWithAuthValidation(DemoEntity.class, body.fromTourRid(), user);
+    DemoEntity fromDemoEntity = getEntityForMutation(body.fromTourRid(), user);
+    if (fromDemoEntity.getEntityType() != TopLevelEntityType.TOUR) {
+      throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Demo not found");
+    }
+    fromDemoEntity.getScreens().stream().sorted(Comparator.comparing(Screen::getId)).forEach(this::lockSnapshotRow);
     return this.duplicateTour(fromDemoEntity, user, tour -> tour.onboarding(false).displayName(body.duplicateTourName()).description(""), false);
   }
 
@@ -293,6 +346,8 @@ public class EntityService extends ServiceBase {
       clonedScreens.add(clonedScreen);
       sourceAndClonedScreenIdMap.put(Long.toString(sourceScreen.getId()), Long.toString(clonedScreen.getId()));
     }
+    refreshPersisted(savedDemoEntity);
+    clonedScreens.forEach(this::refreshPersisted);
     DemoEntity.DemoEntityBuilder<?, ?> updatedTourBuilder = savedDemoEntity.toBuilder().screens(clonedScreens);
     DemoEntity updatedDemoEntity = updatedTourBuilder.build();
     List<EntityConfigKV> entityConfigKV = getEntityConfigKV(demoEntity.getBelongsToOrg());
@@ -358,7 +413,9 @@ public class EntityService extends ServiceBase {
 
   @Transactional
   public List<RespDemoEntity> removeEntity(String rid, User userEntity, TopLevelEntityType type) {
-    DemoEntity demoEntity = getEntityByRIdWithAuthValidation(DemoEntity.class, rid, userEntity);
+    DemoEntity demoEntity = getEntityForMutation(rid, userEntity);
+    if (demoEntity.getEntityType() != type) throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Demo not found");
+    publicationLifecycle.remove(demoEntity);
     demoEntity.setDeleted(TourDeleted.DELETED);
     demoEntityRepo.save(demoEntity);
     return getAllEntityForOrg(userEntity.getBelongsToOrg(), TourDeleted.ACTIVE, type);
@@ -367,12 +424,18 @@ public class EntityService extends ServiceBase {
 
   @Transactional
   public RespDemoEntity publishEntity(String rid, User userEntity, RespCommonConfig commonConfig, TopLevelEntityType entityType) {
-    DemoEntity demoEntity = getEntityByRIdWithAuthValidation(DemoEntity.class, rid, userEntity);
+    DemoEntity demoEntity = getEntityForMutation(rid, userEntity);
     return publishEntityBasedOnEntityType(demoEntity, commonConfig, entityType);
   }
 
   @Transactional
   protected RespDemoEntity publishEntityBasedOnEntityType(DemoEntity demoEntity, RespCommonConfig commonConfig, TopLevelEntityType entityType) {
+    if (demoEntity.getEntityType() != entityType) {
+      throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Demo not found");
+    }
+    // Resolve required account state before uploading any part of the publication.
+    requirePublicationSubscription(demoEntity.getBelongsToOrg());
+    publicationLifecycle.track(demoEntity, demoEntity.getRid());
     if (entityType == TopLevelEntityType.TOUR) {
       return copyDataForPublishTour(demoEntity, commonConfig);
     } else {
@@ -382,7 +445,8 @@ public class EntityService extends ServiceBase {
 
   @Transactional
   public RespDemoEntity publishEntity(ReqTourRid body, RespCommonConfig commonConfig, TopLevelEntityType entityType) {
-    Optional<DemoEntity> maybeTour = demoEntityRepo.findByRidAndDeletedAndEntityType(body.tourRid(), TourDeleted.ACTIVE, entityType);
+    Optional<DemoEntity> maybeTour = demoEntityRepo.findByRidForUpdate(body.tourRid())
+      .filter(entity -> entity.getDeleted() == TourDeleted.ACTIVE && entity.getEntityType() == entityType);
     if (maybeTour.isEmpty()) throw new RuntimeException("entity not present");
     return publishEntityBasedOnEntityType(maybeTour.get(), commonConfig, entityType);
   }
@@ -412,7 +476,8 @@ public class EntityService extends ServiceBase {
 
   @Transactional
   public Pair<Boolean, RespDemoEntity> refreshAndPublishEntityDataFile(String rid, RespCommonConfig commonConfig) {
-    Optional<DemoEntity> maybeTour = demoEntityRepo.findByRidAndDeleted(rid, TourDeleted.ACTIVE);
+    Optional<DemoEntity> maybeTour = demoEntityRepo.findByRidForUpdate(rid)
+      .filter(entity -> entity.getDeleted() == TourDeleted.ACTIVE);
     DemoEntity demoEntity = maybeTour.orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND));
     if (demoEntity.getLastPublishedDate() == null) {
       List<EntityConfigKV> entityConfigKV = getEntityConfigKV(demoEntity.getBelongsToOrg());
@@ -424,14 +489,15 @@ public class EntityService extends ServiceBase {
 
   @Transactional
   public RespDemoEntity updateEntityAndUploadTos3(DemoEntity demoEntity, Integer nextVersion, RespCommonConfig commonConfig) {
+    Subscription sub = requirePublicationSubscription(demoEntity.getBelongsToOrg());
     demoEntity.setLastPublishedDate(Utils.getCurrentUtcTimestamp());
     demoEntity.setPublishedVersion(nextVersion);
+    refreshPersisted(demoEntity);
 
     List<EntityConfigKV> entityConfigKV = getEntityConfigKV(demoEntity.getBelongsToOrg());
     RespDemoEntityWithSubEntities respTour = RespDemoEntityWithSubEntities.from(demoEntity, commonConfig, entityConfigKV);
 
     // Based on subscription plan get log class
-    Subscription sub = subscriptionRepo.getSubscriptionByOrgId(demoEntity.getBelongsToOrg());
     ClientLogClass logClass = switch (sub.getPaymentPlan()) {
       case SOLO, STARTUP, LIFETIME_TIER1, LIFETIME_TIER2 -> ClientLogClass.Basic;
       case LIFETIME_TIER3, LIFETIME_TIER4, LIFETIME_TIER5, BUSINESS -> ClientLogClass.Full;
@@ -440,12 +506,34 @@ public class EntityService extends ServiceBase {
     ApiResp<RespDemoEntityWithSubEntities> apiResp = ApiResp.<RespDemoEntityWithSubEntities>builder().data(respTour).build();
 
     try {
-      String tourResp = objectMapper.writeValueAsString(apiResp);
+      ObjectNode publicResponse = PublicDemoMetadata.project(objectMapper.valueToTree(apiResp));
+      if (demoEntity.getEntityType() == TopLevelEntityType.TOUR) {
+        Set<Long> redactedScreens = publishedRedactions(demoEntity, nextVersion);
+        ObjectNode data = (ObjectNode) publicResponse.get("data");
+        for (var screen : data.path("screens")) {
+          if (redactedScreens.contains(screen.path("id").asLong())) {
+            ObjectNode metadata = (ObjectNode) screen;
+            metadata.put("redacted", true);
+            metadata.remove(List.of("thumbnail", "icon", "url"));
+          } else if (!screen.path("thumbnail").asText("").isBlank()) {
+            ((ObjectNode) screen).put("thumbnail", publishedThumbnail(demoEntity, nextVersion,
+              screen.path("assetPrefixHash").asText()).getS3UriToFile());
+          }
+        }
+        if (data.path("info") instanceof ObjectNode info) {
+          // Only a derivative from this exact publication may represent the tour.
+          info.remove("thumbnail");
+          if (redactedScreens.isEmpty()) for (var screen : data.path("screens")) {
+            if (screen.hasNonNull("thumbnail")) { info.set("thumbnail", screen.get("thumbnail")); break; }
+          }
+        }
+      }
+      String tourResp = objectMapper.writeValueAsString(publicResponse);
       uploadDataFileToS3(tourResp, demoEntity.getRid(), S3Config.getEntityFiles().publishedTourEntityFile(),
         demoEntity.getEntityType() == TopLevelEntityType.DEMO_HUB ? S3Config.AssetType.PublishedDemoHub : S3Config.AssetType.PublishedTour);
 
       DemoEntity savedDemoEntity = demoEntityRepo.save(demoEntity);
-      return RespDemoEntity.from(savedDemoEntity, entityConfigKV);
+      return RespDemoEntity.from(refreshPersisted(savedDemoEntity), entityConfigKV);
     } catch (Exception e) {
       log.error("Error while trying to publish entity", e);
       throw new RuntimeException(e.getMessage());
@@ -460,7 +548,6 @@ public class EntityService extends ServiceBase {
       demoEntity.getAssetPrefixHash(),
       S3Config.getEntityFiles().demoHubDataFile().filename());
     URL url = s3Service.preSignedUrl(filePath, "application/json");
-    log.warn("url {}", url);
 
     return RespUploadUrl.builder()
       .url(url.toString())
@@ -469,13 +556,27 @@ public class EntityService extends ServiceBase {
       .build();
   }
 
+  private Subscription requirePublicationSubscription(Long orgId) {
+    Subscription subscription = subscriptionRepo.getSubscriptionByOrgId(orgId);
+    if (subscription == null || subscription.getPaymentPlan() == null) {
+      throw new ResponseStatusException(HttpStatus.CONFLICT,
+        "Complete workspace plan setup before publishing this demo.");
+    }
+    return subscription;
+  }
+
   @Transactional
   public RespDemoEntity copyDataForPublishTour(DemoEntity demoEntity, RespCommonConfig commonConfig) {
     Set<Screen> screens = demoEntity.getScreens();
+    // The caller holds the demo lock. All publications acquire screen locks in the same order;
+    // refresh is required because the association may already contain older managed instances.
+    screens.stream().sorted(Comparator.comparing(Screen::getId)).forEach(this::lockSnapshotRow);
 
     try {
-      uploadTourManifestToS3(demoEntity);
       Triple<AssetFilePath, AssetFilePath, AssetFilePath> assetFilePaths = getAssetFilePathForTour(demoEntity);
+      var globalEdits = objectMapper.readTree(s3Service.getObjectContent(assetFilePaths.getRight()));
+      var emptyEdits = PublishedEdits.project(globalEdits, true);
+      emptyEdits.putObject("edits");
 
       Integer nextVersion = demoEntity.getPublishedVersion() + 1;
       AssetFilePath toTourDataFilePath = s3Config.getQualifiedPathFor(
@@ -485,16 +586,31 @@ public class EntityService extends ServiceBase {
       AssetFilePath toTourEditsFilePath = s3Config.getQualifiedPathFor(
         S3Config.AssetType.Tour, demoEntity.getAssetPrefixHash(), S3Config.getEntityFiles().publishedEditFile().filename(nextVersion));
 
+      Map<Long, PublishedScreen.Result> compiledScreens = new HashMap<>();
+      Set<String> blockedAssets = new HashSet<>();
+      for (Screen screen : screens) if (screen.getType() != ScreenType.Img) {
+        var compiled = PublishedScreen.compile(objectMapper.readTree(s3Service.getObjectContent(s3Config.getQualifiedPathFor(
+          S3Config.AssetType.Screen, screen.getAssetPrefixHash(), "index.json"))),
+          objectMapper.readTree(s3Service.getObjectContent(s3Config.getQualifiedPathFor(
+            S3Config.AssetType.Screen, screen.getAssetPrefixHash(), "edits.json"))), globalEdits);
+        compiledScreens.put(screen.getId(), compiled);
+        for (var key : compiled.screen().path("redactedAssetKeys")) blockedAssets.add(key.asText());
+      }
       List<Callable<AssetFilePath>> tourInfoCopier = new ArrayList<>();
-      Callable<AssetFilePath> tourDataCopier = () -> s3Service.copy(assetFilePaths.getLeft(), toTourDataFilePath, Map.of(
+      var publicTour = proxyDelivery.publish(objectMapper.readTree(s3Service.getObjectContent(assetFilePaths.getLeft())),
+        demoEntity.getBelongsToOrg(), demoEntity.getAssetPrefixHash(), nextVersion, blockedAssets);
+      var publicLoader = proxyDelivery.publish(objectMapper.readTree(s3Service.getObjectContent(assetFilePaths.getMiddle())),
+        demoEntity.getBelongsToOrg(), demoEntity.getAssetPrefixHash(), nextVersion, blockedAssets);
+      Callable<AssetFilePath> tourDataCopier = () -> s3Service.upload(toTourDataFilePath, objectMapper.writeValueAsBytes(publicTour), Map.of(
         HttpHeaders.CONTENT_TYPE, "application/json",
         HttpHeaders.CACHE_CONTROL, S3Config.getCachePolicyStr(S3Config.getEntityFiles().publishedDataFile().cachePolicy())
       ));
-      Callable<AssetFilePath> tourLoaderCopier = () -> s3Service.copy(assetFilePaths.getMiddle(), toTourLoaderFilePath, Map.of(
+      Callable<AssetFilePath> tourLoaderCopier = () -> s3Service.upload(toTourLoaderFilePath, objectMapper.writeValueAsBytes(publicLoader), Map.of(
         HttpHeaders.CONTENT_TYPE, "application/json",
         HttpHeaders.CACHE_CONTROL, S3Config.getCachePolicyStr(S3Config.getEntityFiles().publishedLoaderFile().cachePolicy())
       ));
-      Callable<AssetFilePath> tourEditsCopier = () -> s3Service.copy(assetFilePaths.getRight(), toTourEditsFilePath, Map.of(
+      Callable<AssetFilePath> tourEditsCopier = () -> s3Service.upload(toTourEditsFilePath,
+        objectMapper.writeValueAsBytes(emptyEdits), Map.of(
         HttpHeaders.CONTENT_TYPE, "application/json",
         HttpHeaders.CACHE_CONTROL, S3Config.getCachePolicyStr(S3Config.getEntityFiles().publishedEditFile().cachePolicy())
       ));
@@ -504,26 +620,58 @@ public class EntityService extends ServiceBase {
       tourInfoCopier.add(tourEditsCopier);
 
       for (Screen screen : screens) {
+        boolean redacted = false;
+        String snapshotPrefix = nextVersion + "/screens/" + screen.getAssetPrefixHash() + "/";
+        AssetFilePath sourceDocument = s3Config.getQualifiedPathFor(S3Config.AssetType.Screen,
+          screen.getAssetPrefixHash(), S3Config.getEntityFiles().screenDataFile().filename());
+        AssetFilePath publishedDocument = s3Config.getQualifiedPathFor(S3Config.AssetType.PublishedTour,
+          "assets-" + demoEntity.getAssetPrefixHash(), snapshotPrefix + "index.json");
         if (screen.getType() != ScreenType.Img) {
           AssetFilePath fromScreenEditFilePath = s3Config.getQualifiedPathFor(
             S3Config.AssetType.Screen,
             screen.getAssetPrefixHash(),
             S3Config.getEntityFiles().editFile().filename());
           AssetFilePath toScreenEditFilePath = s3Config.getQualifiedPathFor(
-            S3Config.AssetType.Screen,
-            screen.getAssetPrefixHash(),
-            S3Config.getEntityFiles().publishedEditFile().filename(nextVersion));
+            S3Config.AssetType.PublishedTour,
+            "assets-" + demoEntity.getAssetPrefixHash(),
+            snapshotPrefix + "edits.json");
 
-          Callable<AssetFilePath> screenEditCopier = () -> s3Service.copy(fromScreenEditFilePath, toScreenEditFilePath, Map.of(
+          var compiled = compiledScreens.get(screen.getId());
+          redacted = compiled.redacted();
+          var playbackScreen = proxyDelivery.publish(compiled.screen(), demoEntity.getBelongsToOrg(), demoEntity.getAssetPrefixHash(), nextVersion, blockedAssets);
+          var playbackEdits = proxyDelivery.publish(compiled.edits(), demoEntity.getBelongsToOrg(), demoEntity.getAssetPrefixHash(), nextVersion, blockedAssets);
+          tourInfoCopier.add(() -> s3Service.upload(publishedDocument, objectMapper.writeValueAsBytes(playbackScreen), Map.of(
+            HttpHeaders.CONTENT_TYPE, "application/json",
+            HttpHeaders.CACHE_CONTROL, S3Config.getCachePolicyStr(S3Config.DATA_FILE_CACHE_POLICY.Cache))));
+          Callable<AssetFilePath> screenEditCopier = () -> s3Service.upload(toScreenEditFilePath,
+            objectMapper.writeValueAsBytes(playbackEdits), Map.of(
             HttpHeaders.CONTENT_TYPE, "application/json",
             HttpHeaders.CACHE_CONTROL, S3Config.getCachePolicyStr(S3Config.getEntityFiles().publishedLoaderFile().cachePolicy())
           ));
           tourInfoCopier.add(screenEditCopier);
+        } else {
+          AssetFilePath sourceImage = s3Config.getQualifiedPathFor(S3Config.AssetType.Screen,
+            screen.getAssetPrefixHash(), "index.img");
+          AssetFilePath publishedImage = s3Config.getQualifiedPathFor(S3Config.AssetType.PublishedTour,
+            "assets-" + demoEntity.getAssetPrefixHash(), snapshotPrefix + "index.img");
+          var imageDocument = com.sharefable.api.common.ImageScreenDocument.withSource(
+            objectMapper.readTree(s3Service.getObjectContent(sourceDocument)), publishedImage.getS3UriToFile());
+          tourInfoCopier.add(() -> s3Service.copy(sourceImage, publishedImage));
+          tourInfoCopier.add(() -> s3Service.upload(publishedDocument, objectMapper.writeValueAsBytes(imageDocument), Map.of(
+            HttpHeaders.CONTENT_TYPE, "application/json",
+            HttpHeaders.CACHE_CONTROL, S3Config.getCachePolicyStr(S3Config.DATA_FILE_CACHE_POLICY.Cache))));
+        }
+        if (!redacted && StringUtils.isNotBlank(screen.getThumbnail())) {
+          tourInfoCopier.add(() -> s3Service.copy(s3Config.getQualifiedPathFor(S3Config.AssetType.Common, screen.getThumbnail()),
+            publishedThumbnail(demoEntity, nextVersion, screen.getAssetPrefixHash())));
         }
       }
       Utils.runInParallel(tourInfoCopier.toArray(new Callable[0]));
+      uploadTourManifestToS3(demoEntity, nextVersion);
 
       return updateEntityAndUploadTos3(demoEntity, nextVersion, commonConfig);
+    } catch (IllegalArgumentException e) {
+      throw new PublicationValidationException(e.getMessage());
     } catch (Exception e) {
       log.error("Error while trying to publish tour", e);
       throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "Something went wrong while trying to publish tour");
@@ -532,7 +680,7 @@ public class EntityService extends ServiceBase {
 
   @Transactional
   @Async
-  public void uploadTourManifestToS3(DemoEntity demoEntity) {
+  public void uploadTourManifestToS3(DemoEntity demoEntity, int version) {
     TourManifest tourManifest = TourManifest.builder()
       .version(1)
       .name(demoEntity.getDisplayName())
@@ -542,12 +690,14 @@ public class EntityService extends ServiceBase {
     try {
       S3Config.PathConfigForClient pathConfigForClient = s3Config.getPathConfigForClient();
       String commonAssetPath = pathConfigForClient.commonAsset();
+      Set<Long> redactedScreens = publishedRedactions(demoEntity, version);
       for (Screen screen : demoEntity.getScreens()) {
+        if (redactedScreens.contains(screen.getId())) continue;
         if (StringUtils.isBlank(screen.getThumbnail())) continue;
         ScreenAssets screenAsset = ScreenAssets.builder()
           .name(screen.getDisplayName())
           .url(screen.getUrl())
-          .thumbnail(commonAssetPath + screen.getThumbnail())
+          .thumbnail(publishedThumbnail(demoEntity, version, screen.getAssetPrefixHash()).getS3UriToFile())
           .icon(screen.getIcon())
           .build();
         screenAssets.add(screenAsset);
@@ -561,6 +711,22 @@ public class EntityService extends ServiceBase {
     } catch (Exception e) {
       throw new RuntimeException("Something went wrong while sending tour screen info to s3 " + e.getMessage());
     }
+  }
+
+  private Set<Long> publishedRedactions(DemoEntity demo, int version) throws IOException {
+    Set<Long> redacted = new HashSet<>();
+    for (Screen screen : demo.getScreens()) {
+      if (screen.getType() == ScreenType.Img) continue;
+      AssetFilePath snapshot = s3Config.getQualifiedPathFor(S3Config.AssetType.PublishedTour,
+        "assets-" + demo.getAssetPrefixHash(), version + "/screens/" + screen.getAssetPrefixHash() + "/index.json");
+      if (objectMapper.readTree(s3Service.getObjectContent(snapshot)).path("redacted").asBoolean()) redacted.add(screen.getId());
+    }
+    return redacted;
+  }
+
+  private AssetFilePath publishedThumbnail(DemoEntity demo, int version, String screenHash) {
+    return s3Config.getQualifiedPathFor(S3Config.AssetType.PublishedTour, "assets-" + demo.getAssetPrefixHash(),
+      version + "/screens/" + screenHash + "/thumbnail.img");
   }
 
   private List<DemoEntity> getOnboardingTours() {
@@ -604,7 +770,7 @@ public class EntityService extends ServiceBase {
 
   @Transactional
   public RespDemoEntity updateEntityProperties(String rid, User userEntity, TopLevelEntityType type, EntityUpdateBase body) {
-    DemoEntity demoEntity = getEntityByRIdWithAuthValidation(DemoEntity.class, rid, userEntity);
+    DemoEntity demoEntity = getEntityForMutation(rid, userEntity);
 
     if (!demoEntity.getEntityType().equals(type)) {
       log.warn("Trying to access different entity, requested {} but got {}", type, demoEntity.getEntityType());
@@ -618,7 +784,15 @@ public class EntityService extends ServiceBase {
     body.getInfo().ifPresent(demoEntity::setInfo);
     body.getLastInteractedAt().ifPresent(lastInteractedAt -> demoEntity.setLastInteractedAt(Utils.getCurrentUtcTimestamp()));
     DemoEntity savedDemoEntity = demoEntityRepo.save(demoEntity);
-    return RespDemoEntity.from(savedDemoEntity);
+    return RespDemoEntity.from(refreshPersisted(savedDemoEntity));
+  }
+
+  // All existing-row metadata/publication mutations share the editor's row lock.
+  // Acquire it before reading fields: locking a previously loaded entity can retain stale state.
+  private DemoEntity getEntityForMutation(String rid, User user) {
+    return demoEntityRepo.findByRidForUpdate(rid)
+      .map(entity -> validateEntityWithAuth(entity, rid, user))
+      .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Demo not found"));
   }
 
   @Transactional

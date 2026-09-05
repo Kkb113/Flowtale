@@ -3,7 +3,7 @@ import { connect } from 'react-redux';
 import { RespOrg, RespSubscription, RespUser } from '@fable/common/dist/api-contract';
 import { LoadingStatus } from '@fable/common/dist/types';
 import { PlusOutlined, UserAddOutlined, UserDeleteOutlined } from '@ant-design/icons';
-import { Button as AntBtn, Tooltip } from 'antd';
+import { Button as AntBtn, Tooltip, message } from 'antd';
 import { getRandomId, SHORT_MONTHS } from '@fable/common/dist/utils';
 import { TState } from '../../reducer';
 import * as GTags from '../../common-styled';
@@ -36,7 +36,7 @@ function getReadableDate(d: Date): string {
 
 interface IDispatchProps {
   getAllUsersForOrg: () => void;
-  activateOrDeactivateUser: (id: number, shouldActivate: boolean) => void;
+  activateOrDeactivateUser: (id: number, shouldActivate: boolean) => Promise<void>;
   getSubscriptionOrCheckoutNew: ()=> Promise<RespSubscription>
 }
 
@@ -73,19 +73,26 @@ type IProps = IOwnProps & IAppStateProps & IDispatchProps & WithRouterProps<{}>;
 interface IOwnStateProps {
   showModal: boolean;
   isInviteUserFeatureAvailable: boolean;
+  changingUserId: number | null;
 }
 
 class UserManagementAndSubscription extends React.PureComponent<IProps, IOwnStateProps> {
+  private mounted = false;
+
   constructor(props: IProps) {
     super(props);
 
     this.state = {
       showModal: false,
+      changingUserId: null,
       isInviteUserFeatureAvailable: true,
     };
   }
 
+  componentWillUnmount(): void { this.mounted = false; }
+
   componentDidMount(): void {
+    this.mounted = true;
     this.props.getAllUsersForOrg();
     document.title = this.props.title;
     if (this.props.featurePlan) this.checkIfInviteUserFeatureAvailable();
@@ -107,6 +114,7 @@ class UserManagementAndSubscription extends React.PureComponent<IProps, IOwnStat
   }
 
   render(): JSX.Element {
+    const isOwner = !!this.props.principal && this.props.org?.createdBy?.id === this.props.principal.id;
     const noOfUsers = this.props.users.length;
     const heading = `${noOfUsers} user${noOfUsers > 1 ? 's' : ''} in your org`;
     return (
@@ -147,7 +155,7 @@ class UserManagementAndSubscription extends React.PureComponent<IProps, IOwnStat
                   }}
                   >
                     <Tags.Heading style={{ fontWeight: 400 }}>{heading}</Tags.Heading>
-                    {this.state.isInviteUserFeatureAvailable
+                    {isOwner && (this.state.isInviteUserFeatureAvailable
                       ? (
                         <Button
                           icon={<PlusOutlined />}
@@ -157,7 +165,7 @@ class UserManagementAndSubscription extends React.PureComponent<IProps, IOwnStat
                           Invite a user
                         </Button>
                       )
-                      : <Upgrade inline subs={this.props.subs} clickedFrom="invite_user" />}
+                      : <Upgrade inline subs={this.props.subs} clickedFrom="invite_user" />)}
                   </div>
                   <GTags.BottomPanel style={{ overflow: 'auto' }}>
                     {this.props.users.map((user) => (
@@ -174,7 +182,7 @@ class UserManagementAndSubscription extends React.PureComponent<IProps, IOwnStat
                           </Tags.MetaDataCon>
                         </Tags.CardDataCon>
                         <Tags.ActionBtnCon>
-                          {this.props.principal?.id !== user.id && (
+                          {isOwner && this.props.org?.createdBy?.id !== user.id && (
                             <Tooltip
                               title={`${user.active ? 'Deactivate' : 'Activate'} user`}
                               overlayStyle={{ fontSize: '0.75rem' }}
@@ -185,8 +193,21 @@ class UserManagementAndSubscription extends React.PureComponent<IProps, IOwnStat
                                 shape="circle"
                                 type="text"
                                 icon={user.active ? <UserDeleteOutlined /> : <UserAddOutlined />}
-                                onClick={e => {
-                                  this.props.activateOrDeactivateUser(user.id, !user.active);
+                                aria-label={`${user.active ? 'Deactivate' : 'Activate'} ${user.firstName} in this workspace`}
+                                disabled={this.state.changingUserId !== null}
+                                loading={this.state.changingUserId === user.id}
+                                onClick={async () => {
+                                  this.setState({ changingUserId: user.id });
+                                  try {
+                                    await this.props.activateOrDeactivateUser(user.id, !user.active);
+                                    if (this.mounted) message.success('Workspace access updated');
+                                  } catch {
+                                    if (!this.mounted) return;
+                                    message.error('Could not confirm the access update. Refresh the member list and retry.');
+                                    this.props.getAllUsersForOrg();
+                                  } finally {
+                                    if (this.mounted) this.setState({ changingUserId: null });
+                                  }
                                 }}
                               />
                             </Tooltip>

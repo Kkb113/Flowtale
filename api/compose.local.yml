@@ -1,0 +1,209 @@
+# Development fixtures only. Fixed credentials have no production use.
+name: fable-local
+services:
+  db:
+    image: mysql:8.4@sha256:b3b90af2a6552ae30c266fdb7d5dd55f3afb72404bb78d37fe8a23eb857fd3fb
+    environment:
+      MYSQL_ROOT_PASSWORD: fable-local-mysql
+      MYSQL_ROOT_HOST: '%'
+    volumes:
+      - mysql-data:/var/lib/mysql
+    healthcheck:
+      test: ['CMD-SHELL', 'MYSQL_PWD=fable-local-mysql mysqladmin ping -h localhost -u root --silent']
+      interval: 5s
+      timeout: 3s
+      retries: 30
+    networks: [local]
+  pg_analytics:
+    image: postgres:16.14-alpine@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777
+    environment:
+      POSTGRES_USER: fable
+      POSTGRES_PASSWORD: fable-local-postgres
+      POSTGRES_DB: fable_analytics
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD', 'pg_isready', '-U', 'fable', '-d', 'fable_analytics']
+      interval: 5s
+      timeout: 3s
+      retries: 30
+    networks:
+      local:
+        aliases: [pg-analytics]
+  storage:
+    image: chrislusf/seaweedfs:4.45@sha256:fc9f76fa993ad69966ffeb2f65d0318fcae39c6f8e20cf68ef7b3a5cb97769e5
+    command: ['mini', '-dir=/data', '-ip=storage', '-master.telemetry=false', '-admin.ui=false', '-webdav=false', '-s3.port.iceberg=0', '-s3.port.lance=0', '-s3.allowDeleteBucketNotEmpty=false']
+    environment:
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+    volumes:
+      - storage-data:/data
+    mem_limit: 1g
+    stop_grace_period: 30s
+    networks: [local]
+  queue:
+    image: fable-local-queue:phase0
+    build:
+      context: ./localstack
+      dockerfile: Dockerfile.queue
+    read_only: true
+    tmpfs: [/tmp]
+    mem_limit: 768m
+    environment:
+      JAVA_TOOL_OPTIONS: -XX:MaxRAMPercentage=65
+    volumes:
+      - queue-data:/data
+    stop_grace_period: 30s
+    networks: [local]
+  infrastructure_init:
+    image: fable-local-jobs:phase0
+    entrypoint: ['node', '/usr/sqs_jobs/scripts/init-local-infrastructure.js']
+    read_only: true
+    volumes:
+      - ../jobs/scripts:/usr/sqs_jobs/scripts:ro
+    depends_on:
+      storage: { condition: service_started }
+      queue: { condition: service_started }
+    networks: [local]
+  schema_api:
+    image: redgate/flyway:13.5@sha256:b4452f1052daf6c365352257a8b9d9aa927be00e8f3c1ac9a031ef9dd5e819d7
+    command: -locations=filesystem:/flyway/migrations -url=jdbc:mysql://db:3306?allowPublicKeyRetrieval=true -schemas=migration -user=root -password=fable-local-mysql -connectRetries=5 migrate
+    depends_on:
+      db: { condition: service_healthy }
+    volumes:
+      - ./schema/api:/flyway/migrations:ro
+    networks: [local]
+  schema_analytics:
+    image: redgate/flyway:13.5@sha256:b4452f1052daf6c365352257a8b9d9aa927be00e8f3c1ac9a031ef9dd5e819d7
+    command: -locations=filesystem:/flyway/migrations -url=jdbc:postgresql://pg_analytics:5432/fable_analytics -schemas=migration -user=fable -password=fable-local-postgres -connectRetries=30 migrate
+    depends_on:
+      pg_analytics: { condition: service_healthy }
+    volumes:
+      - ./schema/analytics:/flyway/migrations:ro
+    networks: [local]
+  seed:
+    image: mysql:8.4@sha256:b3b90af2a6552ae30c266fdb7d5dd55f3afb72404bb78d37fe8a23eb857fd3fb
+    entrypoint: ['mysql', '-h', 'db', '-u', 'root', '--execute=source /seed/seed-local.sql']
+    environment:
+      MYSQL_PWD: fable-local-mysql
+    volumes:
+      - ./localstack/seed-local.sql:/seed/seed-local.sql:ro
+    depends_on:
+      schema_api: { condition: service_completed_successfully }
+    networks: [local]
+  api:
+    image: eclipse-temurin:17-jdk@sha256:a27c79d44326d5f689668df5fedfee487652066d2a91e172747056cc7fbee6fc
+    user: '1000:1000'
+    read_only: true
+    tmpfs: [/tmp]
+    mem_limit: 1g
+    entrypoint: ['java', '-jar', '/opt/fable/api.jar']
+    volumes:
+      - ./target/api-1.3.29.jar:/opt/fable/api.jar:ro
+    environment:
+      APP_ENV: local
+      LOCAL_DEVELOPMENT: 'true'
+      DB_CONN_URL: jdbc:mysql://db:3306
+      DB_USER: root
+      DB_PWD: fable-local-mysql
+      SPRING_DATASOURCE_API_URL: jdbc:mysql://db:3306/fable_tour_app?allowPublicKeyRetrieval=true&sslMode=DISABLED
+      ANALYTICS_DB_CONN_URL: jdbc:postgresql://pg-analytics:5432/fable_analytics
+      ANALYTICS_DB_USER: fable
+      ANALYTICS_DB_PWD: fable-local-postgres
+      ASSET_BUCKET_NAME: fable-local-assets
+      PVT_ASSET_BUCKET_NAME: fable-local-private
+      AWS_S3_REGION: ap-south-1
+      AWS_S3_ENDPOINT: http://storage:8333
+      AWS_S3_PUBLIC_ENDPOINT: http://localhost:14566
+      AWS_SQS_ENDPOINT: http://queue:9324
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+      AWS_EC2_METADATA_DISABLED: 'true'
+      INTERNAL_SERVICE_TOKEN: fable-local-internal-service-token-development-only
+      JAVA_TOOL_OPTIONS: -XX:MaxRAMPercentage=65 -Duser.timezone=UTC
+    depends_on:
+      seed: { condition: service_completed_successfully }
+      schema_analytics: { condition: service_completed_successfully }
+      infrastructure_init: { condition: service_completed_successfully }
+    networks: [local]
+  jobs:
+    image: fable-local-jobs:phase0
+    build:
+      context: ../jobs
+      target: production
+    read_only: true
+    tmpfs:
+      - /tmp:size=2g,mode=1777
+    mem_limit: 2g
+    cpus: 2
+    stop_grace_period: 35s
+    environment:
+      APP_ENV: local
+      NODE_ENV: development
+      LOCAL_DEVELOPMENT: 'true'
+      DB_CONN_URL: mysql://db:3306
+      DB_DB: fable_tour_app
+      DB_USER: root
+      DB_PWD: fable-local-mysql
+      ANALYTICS_DB_CONN_URL: postgres://pg-analytics:5432
+      ANALYTICS_DB_NAME: fable_analytics
+      ANALYTICS_DB_USER: fable
+      ANALYTICS_DB_PWD: fable-local-postgres
+      AWS_ASSET_FILE_S3_BUCKET: fable-local-assets
+      AWS_ASSET_FILE_S3_BUCKET_REGION: ap-south-1
+      AWS_PRIVATE_ASSET_S3_BUCKET: fable-local-private
+      AWS_PRIVATE_ASSET_S3_BUCKET_REGION: ap-south-1
+      AWS_ASSET_ROOT_QUALIFIER: local
+      AWS_ENDPOINT_URL_S3: http://storage:8333
+      AWS_ENDPOINT_URL_SQS: http://queue:9324
+      AWS_PUBLIC_ENDPOINT: http://localhost:14566
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+      AWS_EC2_METADATA_DISABLED: 'true'
+      SQS_Q_REGION: ap-south-1
+      SQS_Q_NAME: tour_app_queue
+      API_SERVER_ENDPOINT: http://api:8080
+      INTERNAL_SERVICE_TOKEN: fable-local-internal-service-token-development-only
+    depends_on:
+      api: { condition: service_started }
+      infrastructure_init: { condition: service_completed_successfully }
+    networks: [local]
+  client:
+    image: fable-local-client:phase0
+    build:
+      context: ../app/workspace
+      dockerfile: Dockerfile.local
+      target: development
+    read_only: true
+    tmpfs:
+      - /tmp:size=256m,mode=1777
+    volumes:
+      - client-shared-cache:/workspace/node_modules/.cache
+      - client-build-cache:/workspace/packages/client/node_modules/.cache
+    mem_limit: 4g
+    depends_on:
+      api: { condition: service_started }
+    networks: [local]
+  gateway:
+    image: nginx:1.28-alpine@sha256:a8b39bd9cf0f83869a2162827a0caf6137ddf759d50a171451b335cecc87d236
+    volumes:
+      - ./localstack/gateway.conf:/etc/nginx/nginx.conf:ro
+    read_only: true
+    tmpfs: [/var/cache/nginx, /var/run]
+    ports:
+      - '127.0.0.1:3000:3000'
+      - '127.0.0.1:18080:8080'
+      - '127.0.0.1:18081:8081'
+      - '127.0.0.1:14566:4566'
+    networks: [local, browser]
+networks:
+  local:
+    internal: true
+  browser:
+volumes:
+  mysql-data:
+  postgres-data:
+  storage-data:
+  queue-data:
+  client-shared-cache:
+  client-build-cache:

@@ -59,4 +59,16 @@ describe('normalizeTourDataDocument', () => {
     expect(() => normalizeTourDataDocument({ v: '2099-01-01' }, defaults))
       .toThrow(UnsupportedTourSchemaError);
   });
+
+  it('preserves extension fields through a load, edit and serialization round trip', () => {
+    const extension = { integration: { ids: ['external-step-1'], enabled: false } };
+    const source = { ...legacyTour, extension, opts: { ...defaults.opts, futureOption: '' } };
+    const normalized = normalizeTourDataDocument(source, defaults);
+    normalized.journey.title = 'Updated title';
+    const saved = JSON.parse(JSON.stringify(normalized));
+    expect(saved.extension).toEqual(extension);
+    expect(saved.opts.futureOption).toBe('');
+    expect(saved.journey.title).toBe('Updated title');
+    expect(source.extension).toEqual(extension);
+  });
 });

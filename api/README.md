@@ -2,6 +2,8 @@
 
 Server-side API for Fable, an interactive demo product platform. This repository contains the backend services that power demo creation, management, analytics, and integrations.
 
+For current local development, use the [root setup instructions](../README.md#local-development-without-cloud-credentials). `node scripts/local-dev.mjs start` from the repository root provisions the complete isolated stack with fixture identity and durable storage. The environment-file and IDE instructions below describe individually configured services; they are not required for local onboarding. `docker-compose.yml` now contains external database migration commands only; `compose.local.yml` owns all local services.
+
 ## Table of Contents
 
 - [Features](#features)
@@ -117,80 +119,22 @@ Before you begin, ensure you have the following installed:
 
 ## Installation & Setup
 
-### 1. Clone the Repository
+For the supported local stack, run this from the monorepo root:
 
 ```bash
-git clone https://github.com/your-org/fable-api.git
-cd fable-api
+node scripts/local-dev.mjs start
 ```
 
-### 2. Set Up Environment Files
+Open http://localhost:3000/login. The API is available at http://localhost:18080; the local databases and queue are internal to Docker. Local startup runs verification, migrations and seeds automatically and requires no Auth0, AWS or billing credentials. See the [root README](../README.md) for fixture accounts, service management and browser tests. From this directory, `make setup` calls the same entry point.
 
-Create environment-specific configuration files. The application supports three environments: `dev`, `staging`, and `prod`.
-
-For local development, create `env.dev`:
+For an individually configured API process against separately provisioned services, copy `env.sample` to an ignored environment file and set the database, authentication, storage and integration configuration appropriate to that environment. These credentials must not be paired with fixture identity. The `make env` targets generate IDE configuration from those files. With Java 17 and the configured databases, use the Maven wrapper to verify and run the API:
 
 ```bash
-cp env.sample env.dev
+./mvnw --batch-mode --no-transfer-progress verify
+./mvnw spring-boot:run
 ```
 
-Edit `env.dev` and fill in your configuration values (see [Configuration](#configuration) section).
-
-### 3. Generate Environment Files for Tools
-
-Generate IDE-compatible environment files: (check Makefile for details)
-
-```bash
-# For development
-make env dev=1
-
-# For staging
-make env staging=1
-```
-
-This creates:
-- `env.now`: Active environment file used by Makefile
-- `env.idea`: IntelliJ IDEA-compatible format (without `export` prefix)
-
-### 4. Start Dependencies with Docker
-
-Start MySQL, PostgreSQL, and LocalStack (S3/SQS):
-
-```bash
-make setup
-```
-
-This will:
-- Start MySQL container on port 3306
-- Start PostgreSQL container on port 5432
-- Start LocalStack on port 4566 and initialize the local asset buckets and tour queue
-- Create necessary volumes for data persistence
-
-### 5. Run Database Migrations
-
-Apply database schema migrations:
-
-```bash
-make db-schema-migrate
-```
-
-This runs Flyway migrations for both:
-- API database (MySQL)
-- Analytics database (PostgreSQL)
-
-### 6. Build the Application
-
-```bash
-make build
-```
-
-### 7. Run the Application
-
-```bash
-make run
-```
-
-The server will start on `http://localhost:8080`.
+`make db-schema-migrate` applies migrations to the explicitly configured external database URLs; it is not needed for the supported local stack. The standalone API uses port 8080 unless configured otherwise.
 
 ## Configuration
 
@@ -219,7 +163,7 @@ The application uses two separate databases:
 1. **MySQL** (Main Database): Stores core application data (demos, screens, organizations, users, subscriptions)
 2. **PostgreSQL** (Analytics Database): Stores analytics events and metrics
 
-Both databases are automatically created when using Docker Compose. For production, you'll need to provision these databases separately.
+Both databases are automatically created by the supported local startup. For production, you'll need to provision these databases separately.
 
 ### Auth0 Configuration
 
@@ -240,15 +184,15 @@ Check Makefile for details.
 |---------|-------------|
 | `make env dev=1` | Generate environment files for development |
 | `make env staging=1` | Generate environment files for staging |
-| `make setup` | Start Docker dependencies (MySQL, PostgreSQL) |
-| `make teardown` | Stop Docker dependencies |
+| `make setup` | Verify, build and start the complete local Fable stack |
+| `make teardown` | Stop the local stack and retain its volumes |
 | `make db-schema-migrate` | Run Flyway database migrations |
 | `make build` | Build the application |
 | `make run` | Run the application |
 | `make gen` | Generate TypeScript API contract definitions |
 | `make containerize v=X.X.X` | Build and push Docker image to ECR |
 | `make container-run` | Run application in Docker container |
-| `make clean-data` | Remove Docker volumes and containers |
+| `make clean-data` | Retired; reports guidance without deleting data |
 
 ## Development
 
@@ -315,7 +259,7 @@ api/
 │   └── analytics/                           # PostgreSQL migration scripts
 ├── dev/
 │   └── *.http                               # HTTP request examples
-├── docker-compose.yml                       # Docker services definition
+├── docker-compose.yml                       # External database migration commands
 ├── Dockerfile                               # Container build definition
 ├── Makefile                                 # Build & deployment commands
 └── pom.xml                                  # Maven dependencies
@@ -516,6 +460,25 @@ Each environment uses its own:
    - Configure: `SENTRY_DSN`
 
 ## Support
+
+### Editing revision migration (V1_47)
+
+Tour and screen `updated_at` values are also the existing client save revision.
+V1_47 preserves the epoch-millisecond API contract, increases SQL precision to
+milliseconds, and installs a `BEFORE UPDATE` trigger on each table. Every row
+update advances at least one millisecond beyond its previous revision, even
+when writes share a clock tick or the database clock moves backward. Creation,
+editing, metadata, duplication and publication responses must flush and refresh
+managed entities before serializing their revisions. Do not replace this with
+an application clock value or disable the triggers for maintenance writes.
+
+Drain old API writers before applying this migration and deploy the matching
+response-refresh code before reopening traffic. The migration account needs
+`ALTER` and `TRIGGER` privileges. Back up the schema and verify both triggers
+exist after migration. Retain the precision and triggers on application rollback;
+rolling back to an API that returns pre-flush timestamps is unsafe for guarded
+editing. This remains an independent per-row revision mechanism, not an atomic
+transaction across SQL and object storage or across multiple editor files.
 
 If you encounter any issues or have questions:
 

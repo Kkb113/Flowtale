@@ -272,15 +272,20 @@ export const validateInput = (field: HTMLDivElement): {
 
   const validationType = (field.getAttribute(FABLE_LEAD_FORM_VALIDATION_FN) || 'text') as LeadFormField;
   const validationFn = validationFnMap[validationType];
-  const fieldValue = (inpulEl as HTMLInputElement).value.trim() || undefined;
+  const fieldValue = (inpulEl as HTMLInputElement | null)?.value?.trim() || undefined;
   const fieldName = inpulEl?.getAttribute(FABLE_LEAD_FORM_FIELD_NAME) || '';
-  const isValid = fieldValue ? validationFn(fieldValue) : isOptional;
+  const configured = Boolean(inpulEl && fieldName && typeof validationFn === 'function'
+    && !['__proto__', 'prototype', 'constructor'].includes(fieldName));
+  const isValid = configured && (fieldValue ? validationFn(fieldValue) : isOptional);
 
   const uid = field.getAttribute('fable-input-field-uid');
   const errorMsgEl = field.querySelector(`[fable-validation-uid="${uid}"]`) as HTMLDivElement;
 
   if (isValid) hideValidationError(errorMsgEl as HTMLDivElement);
-  else showValidationError(errorMsgEl as HTMLDivElement, getValidationErrorMsg(fieldValue, validationType));
+  else {
+    showValidationError(errorMsgEl as HTMLDivElement, configured
+      ? getValidationErrorMsg(fieldValue, validationType) : 'This form field needs to be updated by the demo owner.');
+  }
 
   return { isValid, fieldName, fieldValue };
 };

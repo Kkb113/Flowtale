@@ -20,7 +20,6 @@ type Props = {};
 const RecordBtnText = "Record a new demo";
 const StopBtnText = "Stop Recording";
 const DeleteBtnText = "Delete Recording";
-const StoppingBtnText = "Finishing...";
 const DeletingBtnText = "Deleting...";
 
 interface State {
@@ -34,6 +33,9 @@ interface State {
   showSettings: boolean;
   purifyDom: SettingState;
   aggressiveBuffer: SettingState;
+  recovery: NonNullable<IExtStoredState["recovery"]>;
+  pending: NonNullable<IExtStoredState["pending"]>;
+  error: string;
 }
 
 class Root extends Component<Props, State> {
@@ -47,7 +49,10 @@ class Root extends Component<Props, State> {
       shouldShowResizeOption: false,
       showSettings: false,
       purifyDom: SettingState.OFF,
-      aggressiveBuffer: SettingState.ON
+      aggressiveBuffer: SettingState.ON,
+      recovery: { total: 0, complete: 0, message: "" },
+      pending: [],
+      error: ""
     };
 
     chrome.runtime.onMessage.addListener(this.onMessageReceiveFromWorkerScript);
@@ -78,12 +83,20 @@ class Root extends Component<Props, State> {
         this.setState({
           inited: true,
           recordingStatus: tMsg.data.state.recordingStatus,
+          recovery: tMsg.data.state.recovery!,
+          pending: tMsg.data.state.pending || [],
           shouldShowResizeOption: tMsg.data.dim.suggestResize,
           resizeToHeight: Math.round(tMsg.data.dim.suggestedHeight),
           resizeToWidth: Math.round(tMsg.data.dim.suggestedWidth),
         });
         break;
       }
+
+      case Msg.RECORDING_STATE:
+        this.setState({ recordingStatus: msg.data.recordingStatus,
+          recovery: msg.data.recovery,
+          pending: msg.data.pending || [] });
+        break;
 
       case Msg.WIN_ON_RESIZE: {
         const tMsg = msg as MsgPayload<{ dim: { h: number; w: number; suggestResize: boolean } }>;
@@ -95,7 +108,6 @@ class Root extends Component<Props, State> {
 
       case Msg.RECORDING_CREATE_OR_DELETE_COMPLETED:
         this.setState({ recordingStatus: RecordingStatus.Idle });
-        window.close();
         break;
 
       default:
@@ -103,35 +115,39 @@ class Root extends Component<Props, State> {
     }
   };
 
-  startRecording = () => {
-    this.setState({ recordingStatus: RecordingStatus.Recording });
-    chrome.runtime.sendMessage({ type: Msg.START_RECORDING });
-    setTimeout(() => {
-      window.close();
-    }, 300);
+  componentWillUnmount() {
+    chrome.runtime.onMessage.removeListener(this.onMessageReceiveFromWorkerScript);
+  }
+
+  command = async (type: Msg, data?: object) => {
+    this.setState({ error: "" });
+    try {
+      const result = await chrome.runtime.sendMessage({ type, data });
+      if (result?.error) throw new Error(result.error);
+      return true;
+    } catch (error) {
+      this.setState({ error: (error as Error).message || "Could not contact the extension. Reopen it to recover your recording." });
+      return false;
+    }
   };
 
-  stopRecording = () => {
-    this.setState({ recordingStatus: RecordingStatus.Stopping });
-    chrome.runtime.sendMessage({ type: Msg.STOP_RECORDING });
+  startRecording = async () => {
+    if (await this.command(Msg.START_RECORDING)) window.close();
   };
+
+  stopRecording = () => this.command(Msg.STOP_RECORDING);
 
   deleteRecording = () => {
-    this.setState({ recordingStatus: RecordingStatus.Deleting });
-    chrome.runtime.sendMessage({ type: Msg.DELETE_RECORDING });
+    if (window.confirm("Discard the current recording? Previously completed recordings will be kept.")) {
+      this.command(Msg.DELETE_RECORDING);
+    }
   };
 
-  // eslint-disable-next-line class-methods-use-this
-  __test = () => {
-    chrome.runtime.sendMessage({ type: Msg.__TEST__ });
-  };
-
-  resetState = () => {
-    this.setState({ recordingStatus: RecordingStatus.Idle });
-    chrome.runtime.sendMessage({ type: Msg.RESET_STATE });
-    setTimeout(() => {
-      window.close();
-    }, 300);
+  recoverComplete = () => {
+    const missing = this.state.recovery.total - this.state.recovery.complete;
+    if (window.confirm(`Keep ${this.state.recovery.complete} complete screen(s) and discard ${missing} incomplete screen(s)?`)) {
+      this.command(Msg.RECOVER_COMPLETE);
+    }
   };
 
   updateSettings = () => {
@@ -161,10 +177,6 @@ class Root extends Component<Props, State> {
             v{version}
           </span>
           &nbsp;&nbsp;
-          <span style={{ cursor: "pointer", paddingTop: "4px" }} title="Reset extension state" onClick={this.resetState}>
-            ◼︎
-          </span>
-          &nbsp;&nbsp;
           {
             this.state.showSettings
               ? (
@@ -180,10 +192,6 @@ class Root extends Component<Props, State> {
           }
         </div>
 
-        {/* WARN For testing */}
-        {false && (
-          <button type="button" onClick={this.__test}>...</button>
-        )}
         {!this.state.inited && (
           <div style={{ display: "flex", flexDirection: "column" }}>
             <div style={{ display: "flex", alignItems: "center" }}>
@@ -195,6 +203,18 @@ class Root extends Component<Props, State> {
         )}
         {this.state.inited && (
           <div className="action-con">
+            {this.state.error && <p role="alert">{this.state.error}</p>}
+            {this.state.recovery.message && <p role="status">{this.state.recovery.message}</p>}
+            {this.state.pending.map(capture => (
+              <button
+                type="button"
+                key={capture.id}
+                className="btn-secondary"
+                onClick={() => this.command(Msg.OPEN_CAPTURE, { id: capture.id })}
+              >
+                Resume {capture.screenCount} screen recording ({new Date(capture.createdAt).toLocaleString()})
+              </button>
+            ))}
             <div className="header-con">
               <button
                 type="button"
@@ -333,10 +353,15 @@ class Root extends Component<Props, State> {
                     }
                     {
                       this.state.recordingStatus === RecordingStatus.Stopping && (
-                        <DisabledStopDelActionBtns
-                          stopBtnText={StoppingBtnText}
-                          deleteBtnText={DeleteBtnText}
-                        />
+                        <div aria-live="polite">
+                          <p>{this.state.recovery.complete} of {this.state.recovery.total} screens are complete.</p>
+                          <p>You can leave this window and reopen it. Unfinished data stays in this browser.</p>
+                          <button type="button" className="btn-primary" onClick={() => this.command(Msg.RESET_STATE)}>Check completion</button>
+                          {this.state.recovery.complete > 0 && this.state.recovery.complete < this.state.recovery.total && (
+                            <button type="button" className="btn-secondary" onClick={this.recoverComplete}>Keep complete screens</button>
+                          )}
+                          <button type="button" className="btn-secondary" onClick={this.deleteRecording}>Discard recording</button>
+                        </div>
                       )
                     }
                     {

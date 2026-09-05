@@ -8,6 +8,7 @@ import com.sharefable.api.common.AssetFilePath;
 import com.sharefable.api.common.EditRevisionGuard;
 import com.sharefable.api.common.FnScreenBuilder;
 import com.sharefable.api.common.Utils;
+import com.sharefable.api.common.ImageThumbnail;
 import com.sharefable.api.config.AppSettings;
 import com.sharefable.api.config.S3Config;
 import com.sharefable.api.entity.DemoEntity;
@@ -16,6 +17,7 @@ import com.sharefable.api.entity.User;
 import com.sharefable.api.repo.DemoEntityRepo;
 import com.sharefable.api.repo.ScreenRepo;
 import com.sharefable.api.transport.ScreenType;
+import org.springframework.http.HttpHeaders;
 import com.sharefable.api.transport.TourDeleted;
 import com.sharefable.api.transport.req.*;
 import com.sharefable.api.transport.resp.RespScreen;
@@ -27,17 +29,11 @@ import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 
-import javax.imageio.ImageIO;
-import java.awt.*;
-import java.awt.image.BufferedImage;
-import java.io.ByteArrayInputStream;
-import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.net.URL;
 import java.util.List;
 import java.util.*;
 import java.util.concurrent.Callable;
-import java.util.concurrent.CompletableFuture;
 import java.util.stream.Collectors;
 
 @Service
@@ -47,15 +43,18 @@ public class ScreenService extends ServiceBase {
   private final S3Config s3Config;
   private final S3Service s3Service;
   private final DemoEntityRepo demoEntityRepo;
+  private final ProxyAssetDelivery proxyDelivery;
   ObjectMapper objectMapper = new ObjectMapper();
 
   @Autowired
-  public ScreenService(ScreenRepo screenRepo, S3Service s3Service, S3Config s3Config, DemoEntityRepo demoEntityRepo, AppSettings settings) {
+  public ScreenService(ScreenRepo screenRepo, S3Service s3Service, S3Config s3Config, DemoEntityRepo demoEntityRepo, AppSettings settings,
+      ProxyAssetDelivery proxyDelivery) {
     super(settings, s3Service, s3Config, screenRepo, demoEntityRepo);
     this.s3Service = s3Service;
     this.s3Config = s3Config;
     this.screenRepo = screenRepo;
     this.demoEntityRepo = demoEntityRepo;
+    this.proxyDelivery = proxyDelivery;
   }
 
   @Transactional
@@ -84,12 +83,10 @@ public class ScreenService extends ServiceBase {
         screen.setType(ScreenType.Img);
         String docTree = updateDocTree(req.body(), assetFilePathForImgFile.getS3UriToFile());
 
-        CompletableFuture<Optional<AssetFilePath>> uploadDocTree = CompletableFuture.supplyAsync(() -> Optional.ofNullable(uploadDataFileToS3(docTree, prefixHash, S3Config.getEntityFiles().screenDataFile(), S3Config.AssetType.Screen)));
-        CompletableFuture<Screen> saveScreen = CompletableFuture.supplyAsync(() -> screenRepo.save(screen));
-        CompletableFuture<Void> combinedFuture = CompletableFuture.allOf(uploadDocTree, saveScreen);
-        combinedFuture.join();
-
-        RespScreen respScreen = RespScreen.from(saveScreen.join());
+        // Persist the row only after its document exists, on the caller's transaction thread.
+        // A background repository save would commit independently even if the upload failed.
+        uploadDataFileToS3(docTree, prefixHash, S3Config.getEntityFiles().screenDataFile(), S3Config.AssetType.Screen);
+        RespScreen respScreen = RespScreen.from(refreshPersisted(screenRepo.save(screen)));
         respScreen.setUploadUrl(Optional.ofNullable(presignedUrlToUploadImageScreen.toString()));
         return respScreen;
       } catch (JsonProcessingException e) {
@@ -118,17 +115,26 @@ public class ScreenService extends ServiceBase {
       screen.setType(ScreenType.SerDom);
       screen.setThumbnail(thumbnailFilePath);
       Screen storedScreen = screenRepo.save(screen);
-      return RespScreen.from(storedScreen);
+      return RespScreen.from(refreshPersisted(storedScreen));
     } catch (Exception e) {
       log.error("Error while uploading file to s3. Message: {}", e.getMessage());
       throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "Something went wrong while saving screen");
     }
   }
 
+  public void refreshCreationUploadUrl(RespScreen response, ReqNewScreen request, User user) {
+    if (request.type() != ScreenType.Img) return;
+    Screen screen = screenRepo.findByRid(response.getRid())
+      .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Screen not found"));
+    validateEntityWithAuth(screen, screen.getRid(), user);
+    AssetFilePath image = s3Config.getQualifiedPathFor(S3Config.AssetType.Screen,
+      screen.getAssetPrefixHash(), S3Config.getEntityFiles().imgFile().filename());
+    response.setUploadUrl(Optional.of(s3Service.preSignedUrl(image, request.contentType().orElseThrow()).toString()));
+  }
+
   private String updateDocTree(String docTree, String imageScreenUrl) throws JsonProcessingException {
-    JsonNode jsonNode = objectMapper.readTree(docTree);
-    ((ObjectNode) jsonNode.path("docTree").path("chldrn").get(2).path("chldrn").get(1).path("attrs")).put("src", imageScreenUrl);
-    return objectMapper.writeValueAsString(jsonNode);
+    return objectMapper.writeValueAsString(com.sharefable.api.common.ImageScreenDocument.withSource(
+      objectMapper.readTree(docTree), imageScreenUrl));
   }
 
   @Transactional
@@ -136,18 +142,16 @@ public class ScreenService extends ServiceBase {
     Long parentId = body.parentId();
     String tourRid = body.tourRid();
 
-    Optional<Screen> maybeScreen = screenRepo.findById(parentId);
-    Optional<DemoEntity> maybeTour = demoEntityRepo.findByRidAndDeletedEquals(tourRid, TourDeleted.ACTIVE);
+    DemoEntity destination = getDemoForAttachment(tourRid, userEntity);
+    Optional<Screen> maybeScreen = screenRepo.findByIdForUpdate(parentId);
 
     if (maybeScreen.isEmpty()) {
       throw new ResponseStatusException(HttpStatus.NOT_FOUND, String.format("Screen with id %s not found", parentId));
     }
-    if (maybeTour.isEmpty()) {
-      throw new ResponseStatusException(HttpStatus.NOT_FOUND, String.format("Tour with id %s not found", tourRid));
-    }
 
-    Screen clonedScreen = cloneScreen(newScreen -> newScreen, maybeScreen.get(), userEntity, maybeTour.get());
-    return RespScreen.from(clonedScreen);
+    Screen source = validateEntityWithAuth(maybeScreen.get(), maybeScreen.get().getRid(), userEntity);
+    Screen clonedScreen = cloneScreen(newScreen -> newScreen, source, userEntity, destination);
+    return RespScreen.from(refreshPersisted(clonedScreen));
   }
 
 
@@ -181,7 +185,12 @@ public class ScreenService extends ServiceBase {
     AssetFilePath toImgScreenFilePath = s3Config.getQualifiedPathFor(
       S3Config.AssetType.Screen, prefixHash, S3Config.getEntityFiles().imgFile().filename());
 
-    Callable<AssetFilePath> screenFileCopier = () -> s3Service.copy(fromScreenFilePath, toScreenFilePath);
+    Callable<AssetFilePath> screenFileCopier = sourceScreen.getType() == ScreenType.Img
+      ? () -> s3Service.upload(toScreenFilePath, objectMapper.writeValueAsBytes(
+        com.sharefable.api.common.ImageScreenDocument.withSource(
+          objectMapper.readTree(s3Service.getObjectContent(fromScreenFilePath)), toImgScreenFilePath.getS3UriToFile())),
+        Map.of(HttpHeaders.CONTENT_TYPE, "application/json", HttpHeaders.CACHE_CONTROL, "no-store"))
+      : () -> s3Service.copy(fromScreenFilePath, toScreenFilePath);
     Callable<AssetFilePath> thumbnailCopier = () -> s3Service.copy(fromThumbnailPath, toThumbnailPath);
     Callable<AssetFilePath> imgFileCopier = () -> s3Service.copy(fromImgScreenFilePath, toImgScreenFilePath);
     Callable<AssetFilePath> editFileCopier = Utils.isParentScreen(sourceScreen)
@@ -189,6 +198,14 @@ public class ScreenService extends ServiceBase {
       : () -> copyDataFileToS3(fromScreenEditFilePath, prefixHash, DATA_FILE_TYPE.SCREEN_EDIT);
 
     try {
+      if (!Objects.equals(sourceScreen.getBelongsToOrg(), belongsToOrg)) {
+        proxyDelivery.copyAccess(objectMapper.readTree(s3Service.getObjectContent(fromScreenFilePath)),
+          sourceScreen.getBelongsToOrg(), belongsToOrg);
+        if (sourceScreen.getType() == ScreenType.SerDom && !Utils.isParentScreen(sourceScreen)) {
+          proxyDelivery.copyAccess(objectMapper.readTree(s3Service.getObjectContent(fromScreenEditFilePath)),
+            sourceScreen.getBelongsToOrg(), belongsToOrg);
+        }
+      }
       List<AssetFilePath> assetFiles = sourceScreen.getType() == ScreenType.SerDom
         ? Utils.runInParallel(screenFileCopier, thumbnailCopier, editFileCopier)
         : Utils.runInParallel(screenFileCopier, thumbnailCopier, imgFileCopier);
@@ -218,7 +235,7 @@ public class ScreenService extends ServiceBase {
 
   @Transactional
   public RespScreen createThumbnailFromImage(ReqThumbnailCreation body, User user) {
-    Screen screen = getEntityByRIdWithAuthValidation(Screen.class, body.screenRid(), user);
+    Screen screen = getScreenForMutation(body.screenRid(), user);
 
     String prefixHash = screen.getAssetPrefixHash();
     String base64Prefix = "data:image/jpeg;base64,";
@@ -229,19 +246,12 @@ public class ScreenService extends ServiceBase {
 
     try {
       byte[] imageContent = s3Service.getObjectContent(imgScreenFilePath);
-      ByteArrayInputStream byteArrayInputStream = new ByteArrayInputStream(imageContent);
-      BufferedImage originalImage = ImageIO.read(byteArrayInputStream);
-      byteArrayInputStream.close();
-
-      BufferedImage resizedImage = new BufferedImage(newWidth, newHeight, BufferedImage.TYPE_INT_RGB);
-      Graphics2D g = resizedImage.createGraphics();
-      g.drawImage(originalImage, 0, 0, newWidth, newHeight, null);
-      g.dispose();
-
-      ByteArrayOutputStream bos = new ByteArrayOutputStream();
-      ImageIO.write(resizedImage, "jpeg", bos);
-      resizedImageBytes = bos.toByteArray();
-      bos.close();
+      try {
+        resizedImageBytes = ImageThumbnail.create(imageContent, newWidth, newHeight);
+      } catch (IOException invalid) {
+        throw new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY,
+          "Upload a valid image within 32,768 pixels per side and 64 million pixels total.", invalid);
+      }
 
       String base64StringOfThumbnail = base64Prefix + Base64.getEncoder().encodeToString(resizedImageBytes);
       Optional<AssetFilePath> uploadedThumbnailPath = uploadBase64ImageToS3(base64StringOfThumbnail, S3Config.AssetType.Common);
@@ -250,7 +260,9 @@ public class ScreenService extends ServiceBase {
       }
       screen.setThumbnail(uploadedThumbnailPath.get().getFilePath());
       Screen storedScreen = screenRepo.save(screen);
-      return RespScreen.from(storedScreen);
+      return RespScreen.from(refreshPersisted(storedScreen));
+    } catch (ResponseStatusException e) {
+      throw e;
     } catch (IOException e) {
       log.error("Something is wrong while getting the image from s3{}", e.getMessage());
       throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "Something went wrong while creating thumbnail");
@@ -262,14 +274,14 @@ public class ScreenService extends ServiceBase {
 
   @Transactional
   public RespScreen assignScreenToTour(ReqScreenTour body, User user) {
-    Screen screen = getEntityByRIdWithAuthValidation(Screen.class, body.screenRid(), user);
-    DemoEntity demoEntity = getEntityByRIdWithAuthValidation(DemoEntity.class, body.tourRid(), user);
+    DemoEntity demoEntity = getDemoForAttachment(body.tourRid(), user);
+    Screen screen = getScreenForMutation(body.screenRid(), user);
 
     Set<DemoEntity> demoEntities = screen.getDemoEntities();
     demoEntities.add(demoEntity);
     screen.setDemoEntities(demoEntities);
     Screen storedScreen = screenRepo.save(screen);
-    return RespScreen.from(storedScreen);
+    return RespScreen.from(refreshPersisted(storedScreen));
   }
 
   @Transactional
@@ -279,16 +291,16 @@ public class ScreenService extends ServiceBase {
   }
 
   @Transactional
-  public Optional<RespScreen> getScreenByRid(String rid) {
+  public Optional<RespScreen> getScreenByRid(String rid, User user) {
     Optional<Screen> maybeScreen = screenRepo.findByRid(rid);
-    return maybeScreen.map(RespScreen::from);
+    return maybeScreen.filter(screen -> user.getBelongsToOrg() != null
+        && java.util.Objects.equals(screen.getBelongsToOrg(), user.getBelongsToOrg()))
+      .map(RespScreen::from);
   }
 
   @Transactional
   public RespScreen updateEditForScreen(ReqRecordEdit body, User userEntity) {
-    Screen screen = screenRepo.findByRidForUpdate(body.rid())
-      .map(entity -> validateEntityWithAuth(entity, body.rid(), userEntity))
-      .orElseThrow(() -> new ResponseStatusException(HttpStatus.FORBIDDEN, ""));
+    Screen screen = getScreenForMutation(body.rid(), userEntity);
     EditRevisionGuard.assertCurrent(screen.getUpdatedAt(), body.expectedRevision());
 
     uploadDataFileToS3(
@@ -300,26 +312,40 @@ public class ScreenService extends ServiceBase {
     // Updates the updatedAt
     screen.setUpdatedAt(Utils.getCurrentUtcTimestamp());
     Screen updatedScreen = screenRepo.save(screen);
-    return RespScreen.from(updatedScreen);
+    return RespScreen.from(refreshPersisted(updatedScreen));
   }
 
   @Transactional
   public RespScreen renameScreen(ReqRenameGeneric body, User userEntity) {
-    Screen screen = getEntityByRIdWithAuthValidation(Screen.class, body.rid(), userEntity);
+    Screen screen = getScreenForMutation(body.rid(), userEntity);
     String newName = body.newName();
     screen.setDisplayName(newName);
     screen.setRid(Utils.createReadableId(newName));
     Screen savedScreen = screenRepo.save(screen);
-    return RespScreen.from(savedScreen);
+    return RespScreen.from(refreshPersisted(savedScreen));
   }
 
   @Transactional
   public RespScreen updateScreenProperty(ReqUpdateScreenProperty body, User userEntity) {
-    Screen screen = getEntityByRIdWithAuthValidation(Screen.class, body.rid(), userEntity);
+    Screen screen = getScreenForMutation(body.rid(), userEntity);
     if (body.propName().equals("responsive")) {
       screen.setResponsive((Boolean) body.propValue());
     }
     Screen updatedScreen = screenRepo.save(screen);
-    return RespScreen.from(updatedScreen);
+    return RespScreen.from(refreshPersisted(updatedScreen));
+  }
+
+  private Screen getScreenForMutation(String rid, User user) {
+    return screenRepo.findByRidForUpdate(rid)
+      .map(entity -> validateEntityWithAuth(entity, rid, user))
+      .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Screen not found"));
+  }
+
+  private DemoEntity getDemoForAttachment(String rid, User user) {
+    return demoEntityRepo.findByRidForUpdate(rid)
+      .filter(entity -> entity.getDeleted() == TourDeleted.ACTIVE
+        && entity.getEntityType() == com.sharefable.api.common.TopLevelEntityType.TOUR)
+      .map(entity -> validateEntityWithAuth(entity, rid, user))
+      .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Demo not found"));
   }
 }

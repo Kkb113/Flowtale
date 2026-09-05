@@ -5,6 +5,8 @@ import { Auth0Provider } from '@auth0/auth0-react';
 import { TState } from '../../reducer';
 import { WithRouterProps, withRouter } from '../../router-hoc';
 import WithPrincipalCheck from './with-principal-check';
+import { isLocalDevelopment } from '../../local-development';
+import { LocalAuthProvider } from '../../component/auth/local-auth';
 
 const APP_CLIENT_ENDPOINT = process.env.REACT_APP_CLIENT_ENDPOINT as string;
 
@@ -31,6 +33,14 @@ class ProtectedRoutes extends React.PureComponent<IProps, IOwnStateProps> {
   render(): JSX.Element {
     const pathname = this.props.location.pathname.toLowerCase();
     const shouldResolvePrincipal = !(pathname === '/login' || pathname === '/logout');
+
+    if (isLocalDevelopment) {
+      return (
+        <LocalAuthProvider>
+          {shouldResolvePrincipal ? <WithPrincipalCheck /> : <Outlet />}
+        </LocalAuthProvider>
+      );
+    }
 
     return (
       <Auth0Provider

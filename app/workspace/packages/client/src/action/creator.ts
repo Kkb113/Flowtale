@@ -1,9 +1,11 @@
 /* TODO There are some repetation of code across creators, fix those
  */
 
-import api from '@fable/common/dist/api';
+import api, { ApiRequestError } from '@fable/common/dist/api';
+import { notification } from 'antd';
 import {
   ApiResp,
+  ResponseStatus,
   ReqCopyScreen,
   ReqNewOrg,
   ReqNewTour,
@@ -84,7 +86,7 @@ import {
   normalizeGlobalConfig,
 } from '@fable/common/dist/utils';
 import { Dispatch } from 'react';
-import { setUser } from '@sentry/react';
+import { captureMessage, setUser } from '@sentry/react';
 import { sentryCaptureException } from '@fable/common/dist/sentry';
 import raiseDeferredError from '@fable/common/dist/deferred-error';
 import { normalizeTourDataDocument } from '@fable/common/dist/tour-data-normalizer';
@@ -92,6 +94,8 @@ import { update_demo_content } from '@fable/common/dist/llm-fn-schema/update_dem
 import { root_router } from '@fable/common/dist/llm-fn-schema/root_router';
 import { RootRouterReq, guide_theme, UpdateDemoContentV1 } from '@fable/common/dist/llm-contract';
 import { ToolUseBlockParam } from '@anthropic-ai/sdk/resources';
+import { CreationJournal } from '../container/create-tour/creation-journal';
+import { dataCdnBaseUrl } from '../data-cdn';
 import { getSingleAnnotationContext } from './ai-context';
 import {
   convertEditsToLineItems,
@@ -100,6 +104,7 @@ import {
   mergeEdits,
   mergeTourData,
   processRawScreenData,
+  thumbnailUrl,
   processRawSubscriptionData,
   processRawTourData,
   P_RespScreen,
@@ -197,20 +202,6 @@ export function startAutosaving() {
   };
 }
 
-export interface TAutosavingLoader {
-  type: ActionType.AUTOSAVING_LOADER;
-  isAutosavingLoader: boolean;
-}
-
-export function startAutosavingLoader() {
-  return async (dispatch: Dispatch<TAutosavingLoader>) => {
-    dispatch({
-      type: ActionType.AUTOSAVING_LOADER,
-      isAutosavingLoader: true,
-    });
-  };
-}
-
 /* ************************************************************************* */
 
 export interface TIAm {
@@ -274,27 +265,22 @@ export function updateUser(firstName: string, lastName: string) {
 
 /* ************************************************************************* */
 
-function passAdditionalSignupParams() {
-  return new Promise(done => {
-    const timer = setTimeout(() => {
-      try {
-        clearTimeout(timer);
-        const additionalUserData = sessionStorage.getItem('fable/usrsp');
-        if (additionalUserData) {
-          api<ReqUserSignupDetails, ApiResp<String>>('/usrsudet', {
-            auth: true,
-            body: {
-              p: additionalUserData
-            }
-          });
-          sessionStorage.removeItem('fable/usrsp');
-        }
-      } catch (e) {
-        raiseDeferredError(e as Error);
-      }
-      done(1);
-    }, 0);
-  });
+async function passAdditionalSignupParams(): Promise<void> {
+  try {
+    const additionalUserData = sessionStorage.getItem('fable/usrsp');
+    if (!additionalUserData) return;
+    await api<ReqUserSignupDetails, ApiResp<String>>('/usrsudet', {
+      auth: true,
+      body: { p: additionalUserData },
+    });
+    if (sessionStorage.getItem('fable/usrsp') === additionalUserData) {
+      sessionStorage.removeItem('fable/usrsp');
+    }
+  } catch {
+    // Optional attribution cannot turn a committed workspace into a failed creation.
+    // Retain the payload so a subsequent onboarding attempt can submit it again.
+    captureMessage('Optional signup attribution was not submitted', 'warning');
+  }
 }
 
 export function createOrg(displayName: string) {
@@ -310,14 +296,13 @@ export function createOrg(displayName: string) {
       },
     });
 
-    await passAdditionalSignupParams();
     localStorage.setItem(FABLE_LOCAL_STORAGE_ORG_ID_KEY, data.data.id.toString());
-    await dispatch(getSubscriptionOrCheckoutNew(true));
 
     dispatch({
       type: ActionType.ORG,
       org: data.data,
     });
+    passAdditionalSignupParams();
     return Promise.resolve(data.data);
   };
 }
@@ -327,24 +312,23 @@ export interface TOrg {
   org: RespOrg | null;
 }
 
-export function fetchOrg(fetchImplicitOrg = false) {
+export function fetchOrg() {
   return async (
     dispatch: Dispatch<TOrg | TGenericLoading | ReturnType<typeof getSubscriptionOrCheckoutNew>>,
   ) => {
     dispatch({
       type: ActionType.ORG_LOADING,
     });
-    const data = await api<null, ApiResp<RespOrg>>(`/org?if=${+fetchImplicitOrg}`, { auth: true });
+    const data = await api<null, ApiResp<RespOrg>>('/org?if=0', { auth: true });
     const org = data.data;
     dispatch({
       type: ActionType.ORG,
       org: org.rid ? org : null,
     });
-    if (!fetchImplicitOrg) dispatch(getSubscriptionOrCheckoutNew());
   };
 }
 
-export function assignOrgToUser(orgId: number, isJoinViaInvite = false) {
+export function assignOrgToUser(orgId: number, isJoinViaInvite?: boolean, inviteCode?: string) {
   return async (
     dispatch: Dispatch<TOrg | TGenericLoading | ReturnType<typeof getSubscriptionOrCheckoutNew>>
   ) => {
@@ -354,15 +338,15 @@ export function assignOrgToUser(orgId: number, isJoinViaInvite = false) {
     const data = await api<ReqAssignOrgToUser, ApiResp<RespOrg>>('/orgstouser', {
       auth: true,
       body: {
-        orgId
+        orgId,
+        inviteCode
       },
     });
 
     if (isJoinViaInvite) {
-      await passAdditionalSignupParams();
+      passAdditionalSignupParams();
     }
-    localStorage.setItem(FABLE_LOCAL_STORAGE_ORG_ID_KEY, orgId.toString());
-    await dispatch(getSubscriptionOrCheckoutNew());
+    localStorage.setItem(FABLE_LOCAL_STORAGE_ORG_ID_KEY, data.data.id.toString());
 
     dispatch({
       type: ActionType.ORG,
@@ -562,7 +546,7 @@ export function getSubscriptionOrCheckoutNew(shouldCreateNewSubsIfNotPresent = f
 
     if (!subs) throw new Error("Can't fetch subscription for account");
 
-    dispatch(getFeaturePlan(subs));
+    await dispatch(getFeaturePlan(subs));
     return Promise.resolve(subs);
   };
 }
@@ -726,7 +710,10 @@ export function loadScreenAndData(
     const state = getState();
     let screen: P_RespScreen | null = null;
     let isScreenFound = false;
-    for (const s of state.default.allScreens) {
+    // A viewer must resolve metadata from its publication, never a newer authoring cache.
+    const availableScreens = loadPublishedDataForTour
+      ? loadPublishedDataForTour.screens || [] : state.default.allScreens;
+    for (const s of availableScreens) {
       if (s.rid === screenRid) {
         screen = s;
         isScreenFound = true;
@@ -734,11 +721,14 @@ export function loadScreenAndData(
       }
     }
     if (!isScreenFound) {
+      if (loadPublishedDataForTour && !isForExportedTour) {
+        throw new Error(`Screen ${screenRid} is missing from this published demo. Please reload the demo.`);
+      }
       try {
         // TODO don't use location.origin
         const data = isForExportedTour
           ? await api<null, ApiResp<RespScreen>>(`${baseUrl}/v1/screen/${screenRid}`)
-          : await api<null, ApiResp<RespScreen>>(`/screen?rid=${screenRid}`);
+          : await api<null, ApiResp<RespScreen>>(`/screen?rid=${encodeURIComponent(screenRid)}`, { auth: true });
         screen = processRawScreenData(data.data, state.default.commonConfig!, loadPublishedDataForTour);
       } catch (e) {
         const err = e as Error;
@@ -746,7 +736,7 @@ export function loadScreenAndData(
       }
     }
 
-    const cacheDataAvailable = shouldUseCache && screen!.id in state.default.screenData;
+    const cacheDataAvailable = shouldUseCache && !loadPublishedDataForTour && screen!.id in state.default.screenData;
     let data;
     let edits;
     let remoteEdits: EditItem[] = [];
@@ -880,7 +870,7 @@ export function addScreenToTour(
 
     if (annAdd) {
       try {
-        const data = await api<null, ApiResp<RespDemoEntity>>(`/tour?rid=${tourRid}&s=1`);
+        const data = await api<null, ApiResp<RespDemoEntity>>(`/tour?rid=${encodeURIComponent(tourRid)}&s=1`, { auth: true });
         const state = getState().default;
         const updatedTour = processRawTourData(data.data, state.commonConfig!, state.globalConfig!);
 
@@ -1036,33 +1026,54 @@ export interface TOpsInProgress {
 
 export function duplicateTour(tour: P_RespTour, newVal: string) {
   return async (dispatch: Dispatch<TTour | TOpsInProgress | TAutosaving>, getState: () => TState) => {
-    startAutosaving();
     dispatch({
       type: ActionType.OPS_IN_PROGRESS,
       ops: Ops.DuplicateTour,
     });
 
-    const data = await api<ReqDuplicateTour, ApiResp<RespDemoEntityWithSubEntities>>('/duptour', {
-      auth: true,
-      body: {
-        duplicateTourName: newVal,
-        fromTourRid: tour.rid,
-      },
-    });
+    try {
+      const principal = getState().default.principal?.id;
+      const workspace = getState().default.org?.id;
+      if (!principal || !workspace) throw new Error('Sign in to your workspace before duplicating this demo.');
+      const assertContext = () => {
+        if (getState().default.principal?.id !== principal || getState().default.org?.id !== workspace) {
+          throw new Error('Return to the original account and workspace to finish duplicating this demo.');
+        }
+      };
+      const intent = JSON.stringify({ duplicateTourName: newVal, fromTourRid: tour.rid });
+      const key = `fable/duplicate/${principal}/${workspace}/${intent}`;
+      if (!navigator.locks) throw new Error('Use a browser with Web Locks support to safely duplicate this demo.');
+      const result = await navigator.locks.request(key, async () => {
+        assertContext();
+        const operation = localStorage.getItem(key) || `duplicate-${crypto.randomUUID()}`;
+        localStorage.setItem(key, operation);
+        const journal = await CreationJournal.open(principal, String(workspace), operation, intent, assertContext);
+        try {
+          let completed = await journal.read<RespDemoEntity>('completed');
+          if (!completed) {
+            const copied = await journal.checkpoint('copy', () => journal.request<ReqDuplicateTour,
+              ApiResp<RespDemoEntityWithSubEntities>>('copy', '/duptour', {
+                duplicateTourName: newVal, fromTourRid: tour.rid,
+              }));
+            completed = await journal.complete(await duplicateGivenTour(copied.data, getState, journal));
+          }
+          assertContext();
+          localStorage.removeItem(key);
+          return completed;
+        } finally { journal.close(); }
+      });
+      assertContext();
+      const duplicatedTour = processRawTourData(result, getState().default.commonConfig!, getState().default.globalConfig!);
 
-    const duplicatedTour = await duplicateGivenTour(data.data, getState);
-
-    dispatch({
-      type: ActionType.TOUR,
-      tour: duplicatedTour,
-      oldTourRid: '',
-      performedAction: 'new',
-    });
-
-    dispatch({
-      type: ActionType.AUTOSAVING,
-      isAutosaving: false
-    });
+      dispatch({
+        type: ActionType.TOUR,
+        tour: duplicatedTour,
+        oldTourRid: '',
+        performedAction: 'new',
+      });
+    } finally {
+      dispatch({ type: ActionType.OPS_IN_PROGRESS, ops: Ops.None });
+    }
   };
 }
 
@@ -1073,15 +1084,15 @@ export interface TTourDelete {
 
 export function deleteTour(tourRid: string) {
   return async (dispatch: Dispatch<TTourDelete>) => {
-    dispatch({
-      type: ActionType.DELETE_TOUR,
-      ridOfTourToBeDeleted: tourRid
-    });
     await api<ReqTourRid, ApiResp<RespDemoEntity[]>>('/deltour', {
       auth: true,
       body: {
         tourRid
       }
+    });
+    dispatch({
+      type: ActionType.DELETE_TOUR,
+      ridOfTourToBeDeleted: tourRid
     });
   };
 }
@@ -1123,8 +1134,8 @@ export function loadTourAnnotationsAndDatasets(
 
     const data = loadPublished
       // eslint-disable-next-line max-len
-      ? await api<null, ApiResp<RespDemoEntityWithSubEntities>>(`https://${process.env.REACT_APP_DATA_CDN}/${process.env.REACT_APP_DATA_CDN_QUALIFIER}/ptour/${rid}/0_d_data.json?ts=${ts}`)
-      : await api<null, ApiResp<RespDemoEntity>>(`/tour?rid=${rid}`);
+      ? await api<null, ApiResp<RespDemoEntityWithSubEntities>>(`${dataCdnBaseUrl()}/${process.env.REACT_APP_DATA_CDN_QUALIFIER}/ptour/${rid}/0_d_data.json?ts=${ts}`)
+      : await api<null, ApiResp<RespDemoEntity>>(`/tour?rid=${encodeURIComponent(rid)}`, { auth: true });
 
     const config: RespCommonConfig = loadPublished
       ? (data.data as RespDemoEntityWithSubEntities).cc!
@@ -1204,8 +1215,8 @@ export function loadTourAndData(
       const data = isForExportedTour
         ? await api<null, ApiResp<RespDemoEntity>>(`${baseUrl}/${process.env.REACT_APP_DATA_CDN_QUALIFIER}/ptour/${tourRid}/0_d_data.json?ts=${newTs}`)
         : loadPublishedData
-          ? await api<null, ApiResp<RespDemoEntity>>(`https://${process.env.REACT_APP_DATA_CDN}/${process.env.REACT_APP_DATA_CDN_QUALIFIER}/ptour/${tourRid}/0_d_data.json?ts=${newTs}`)
-          : await api<null, ApiResp<RespDemoEntity>>(`/tour?rid=${tourRid}${shouldGetScreens ? '&s=1' : ''}`);
+          ? await api<null, ApiResp<RespDemoEntity>>(`${dataCdnBaseUrl()}/${process.env.REACT_APP_DATA_CDN_QUALIFIER}/ptour/${tourRid}/0_d_data.json?ts=${newTs}`)
+          : await api<null, ApiResp<RespDemoEntity>>(`/tour?rid=${encodeURIComponent(tourRid)}${shouldGetScreens ? '&s=1' : ''}`, { auth: true });
 
       let config: RespCommonConfig;
       if (loadPublishedData) {
@@ -1329,6 +1340,9 @@ export function publishTour(tour: P_RespTour) {
       tour = processRawTourData(data.data, state.default.commonConfig!, state.default.globalConfig!, false);
       publishSuccessful = true;
     } catch (e) {
+      if (e instanceof ApiRequestError && e.status === 422) {
+        notification.error({ message: 'Review edits before publishing', description: e.message, duration: 0 });
+      }
       sentryCaptureException(new Error(`Error while loading tour and corresponding data ${(e as Error).message}`));
       publishSuccessful = false;
     }
@@ -1350,7 +1364,7 @@ export function getTourData(tourRid : string) {
     let tour : P_RespTour | null = null;
 
     try {
-      const data = await api<null, ApiResp<RespDemoEntity>>(`/tour?rid=${tourRid}`);
+      const data = await api<null, ApiResp<RespDemoEntity>>(`/tour?rid=${encodeURIComponent(tourRid)}`, { auth: true });
       if (data.data) {
         tour = processRawTourData(data.data, state.default.commonConfig!);
       }
@@ -1365,6 +1379,7 @@ export function getTourData(tourRid : string) {
 /* ************************************************************************* */
 
 export interface TSaveEditChunks {
+  preserveLocal?: boolean;
   type: ActionType.SAVE_EDIT_CHUNKS;
   screenId: number;
   editList: EditItem[];
@@ -1384,6 +1399,7 @@ export function saveEditChunks(screen: P_RespScreen, editChunks: AllEdits<ElEdit
 }
 
 export interface TSaveGlobalEditChunks {
+  preserveLocal?: boolean;
   type: ActionType.SAVE_GLOBAL_EDIT_CHUNKS;
   editList: EditItem[];
   isLocal: boolean;
@@ -1406,6 +1422,12 @@ export function getExpectedRevision(value: Date | string | number | null | undef
   return Number.isFinite(revision) ? revision : undefined;
 }
 
+function hasPendingEditorEdits(state: TState): boolean {
+  const editor = state.default;
+  return editor.localTourOpts !== null || Object.keys(editor.localAnnotations).length > 0
+    || editor.localGlobalEdits.length > 0 || Object.values(editor.localEdits).some(edits => edits.length > 0);
+}
+
 export function flushEditChunksToMasterFile(
   screenRidIdStr: string,
   localEdits: AllEdits<ElEditType>,
@@ -1415,6 +1437,8 @@ export function flushEditChunksToMasterFile(
     const [id, ...rid] = screenRidIdStr.split('/');
     const screenId = +id;
     const screenRid = rid.join('/');
+    const targetTourRid = getState().default.currentTour?.rid;
+    let acknowledged = false;
     try {
       const currentState = getState().default;
       const savedEditData = currentState.screenEdits[screenId];
@@ -1443,8 +1467,12 @@ export function flushEditChunksToMasterFile(
         },
       });
 
+      acknowledged = true;
+      if (getState().default.currentTour?.rid !== targetTourRid) return getExpectedRevision(screenResp.data.updatedAt);
+
       dispatch({
         type: ActionType.SAVE_EDIT_CHUNKS,
+        preserveLocal: getState().default.localEdits[screenId] !== currentState.localEdits[screenId],
         screenId,
         editList: convertEditsToLineItems(nextEditData.edits, false, savedScreenData.docTree),
         editFile: nextEditData,
@@ -1456,10 +1484,12 @@ export function flushEditChunksToMasterFile(
       });
       return getExpectedRevision(screenResp.data.updatedAt);
     } finally {
-      dispatch({
-        type: ActionType.AUTOSAVING,
-        isAutosaving: false
-      });
+      if (getState().default.currentTour?.rid === targetTourRid) {
+        dispatch({
+          type: ActionType.AUTOSAVING,
+          isAutosaving: !acknowledged || hasPendingEditorEdits(getState())
+        });
+      }
     }
   };
 }
@@ -1470,8 +1500,10 @@ export function flushGlobalEditChunksToMasterFile(
   expectedRevision?: number
 ) {
   return async (dispatch: Dispatch<TSaveGlobalEditChunks | TAutosaving | TTour>, getState: () => TState) => {
+    let acknowledged = false;
     try {
       const currentState = getState().default;
+      if (currentState.currentTour?.rid !== tourRid) throw new Error('The workspace is displaying another demo; edits remain queued');
       const savedEditData = currentState.globalEditFile;
       if (!savedEditData) {
         throw new Error(`Global edits for tour ${tourRid} are not loaded; cached edits remain queued`);
@@ -1490,8 +1522,12 @@ export function flushGlobalEditChunksToMasterFile(
         },
       });
 
+      acknowledged = true;
+      if (getState().default.currentTour?.rid !== tourRid) return getExpectedRevision(tourResp.data.updatedAt);
+
       dispatch({
         type: ActionType.SAVE_GLOBAL_EDIT_CHUNKS,
+        preserveLocal: getState().default.localGlobalEdits !== currentState.localGlobalEdits,
         editList: convertGlobalEditsToLineItems(nextEditData.edits, false),
         editFile: nextEditData,
         isLocal: false,
@@ -1509,10 +1545,12 @@ export function flushGlobalEditChunksToMasterFile(
       });
       return getExpectedRevision(tourResp.data.updatedAt);
     } finally {
-      dispatch({
-        type: ActionType.AUTOSAVING,
-        isAutosaving: false
-      });
+      if (getState().default.currentTour?.rid === tourRid) {
+        dispatch({
+          type: ActionType.AUTOSAVING,
+          isAutosaving: !acknowledged || hasPendingEditorEdits(getState())
+        });
+      }
     }
   };
 }
@@ -1520,6 +1558,7 @@ export function flushGlobalEditChunksToMasterFile(
 /* ************************************************************************* */
 
 export interface TSaveTourEntities {
+  preserveLocal?: boolean;
   type: ActionType.SAVE_TOUR_ENTITIES;
   tour: P_RespTour;
   data: TourData | null,
@@ -1550,22 +1589,33 @@ export function saveTourData(tour: P_RespTour, data: TourDataWoScheme) {
 export interface TSaveTourLoader {
   type: ActionType.SAVE_TOUR_LOADER,
   tour: P_RespTour,
-  loader: ITourLoaderData
+  loader: ITourLoaderData;
+  pending?: boolean;
+  preserveLocal?: boolean;
 }
 
-export function recordLoaderData(tour: P_RespTour, loaderData: ITourLoaderData) {
+export function saveLocalLoaderData(tour: P_RespTour, loader: ITourLoaderData): TSaveTourLoader {
+  return { type: ActionType.SAVE_TOUR_LOADER, tour, loader, pending: true };
+}
+
+export function recordLoaderData(tour: P_RespTour, loaderData: ITourLoaderData, expectedRevision?: number) {
   return async (dispatch: Dispatch<TSaveTourLoader | TTour>, getState: () => TState) => {
     const state = getState();
     const globalOpts = state.default.globalConfig!;
-    loaderData.lastUpdatedAtUTC = getCurrentUtcUnixTime();
+    const revision = expectedRevision ?? getExpectedRevision(tour.updatedAt);
+    if (revision === undefined) throw new Error('The saved loader version could not be verified. Reload the demo before saving.');
+    const nextLoader = { ...JSON.parse(JSON.stringify(loaderData)), lastUpdatedAtUTC: getCurrentUtcUnixTime() };
     const data = await api<ReqRecordEdit, ApiResp<RespDemoEntity>>('/recordtrloaderedit', {
       auth: true,
       body: {
         rid: tour.rid,
-        editData: JSON.stringify(loaderData),
+        editData: JSON.stringify(nextLoader),
+        expectedRevision: revision,
       },
     });
 
+    if (getState().default.currentTour?.rid !== tour.rid) return getExpectedRevision(data.data.updatedAt);
+    const preserveLocal = getState().default.tourLoaderData !== state.default.tourLoaderData;
     dispatch({
       type: ActionType.TOUR,
       tour: processRawTourData(data.data, state.default.commonConfig!, globalOpts, false),
@@ -1576,8 +1626,10 @@ export function recordLoaderData(tour: P_RespTour, loaderData: ITourLoaderData) 
     dispatch({
       type: ActionType.SAVE_TOUR_LOADER,
       tour,
-      loader: processLoader(normalizeBackwardCompatibilityForLoader(loaderData), globalOpts)
+      loader: processLoader(normalizeBackwardCompatibilityForLoader(nextLoader), globalOpts),
+      preserveLocal,
     });
+    return getExpectedRevision(data.data.updatedAt);
   };
 }
 
@@ -1587,8 +1639,10 @@ export function flushTourDataToMasterFile(
   expectedRevision?: number
 ) {
   return async (dispatch: Dispatch<TSaveTourEntities | TAutosaving | TTour>, getState: () => TState) => {
+    let acknowledged = false;
     try {
       const state = getState();
+      if (state.default.currentTour?.rid !== tour.rid) throw new Error('The workspace is displaying another demo; edits remain queued');
       const savedData = state.default.tourData;
       if (!savedData) {
         throw new Error(`Tour data for ${tour.rid} is not loaded; cached edits remain queued`);
@@ -1608,8 +1662,12 @@ export function flushTourDataToMasterFile(
         },
       });
       const annotationAndOpts = getThemeAndAnnotationFromDataFile(mergedData, state.default.globalConfig!, false);
+      acknowledged = true;
+      if (getState().default.currentTour?.rid !== tour.rid) return getExpectedRevision(data.data.updatedAt);
       dispatch({
         type: ActionType.SAVE_TOUR_ENTITIES,
+        preserveLocal: getState().default.localAnnotations !== state.default.localAnnotations
+          || getState().default.localTourOpts !== state.default.localTourOpts,
         tour,
         data: mergedData,
         annotations: annotationAndOpts.annotations,
@@ -1626,10 +1684,12 @@ export function flushTourDataToMasterFile(
       });
       return getExpectedRevision(data.data.updatedAt);
     } finally {
-      dispatch({
-        type: ActionType.AUTOSAVING,
-        isAutosaving: false
-      });
+      if (getState().default.currentTour?.rid === tour.rid) {
+        dispatch({
+          type: ActionType.AUTOSAVING,
+          isAutosaving: !acknowledged || hasPendingEditorEdits(getState())
+        });
+      }
     }
   };
 }
@@ -1701,7 +1761,8 @@ export interface TUserPropChange {
 }
 
 export function activateOrDeactivateUser(id: number, shouldActivate: boolean) {
-  return async (dispatch: Dispatch<TUserPropChange>) => {
+  return async (dispatch: Dispatch<TUserPropChange>, getState: () => TState) => {
+    const orgId = getState().default.org?.id;
     const data = await api<ReqActivateOrDeactivateUser, ApiResp<RespUser>>('/aodusr', {
       method: 'POST',
       body: {
@@ -1709,6 +1770,8 @@ export function activateOrDeactivateUser(id: number, shouldActivate: boolean) {
         shouldActivate,
       }
     });
+    if (data.status === ResponseStatus.Failure || !data.data?.id) throw new Error('Workspace access update failed');
+    if (getState().default.org?.id !== orgId) return;
     dispatch({
       type: ActionType.USER_UPDATED,
       user: data.data,
@@ -1719,10 +1782,13 @@ export function activateOrDeactivateUser(id: number, shouldActivate: boolean) {
 const duplicateGivenTour = async (
   tour: RespDemoEntityWithSubEntities,
   getState: () => TState,
-): Promise<P_RespTour> => {
+  journal: CreationJournal,
+): Promise<RespDemoEntity> => {
   const duplicatedTour = processRawTourData(tour, getState().default.commonConfig!, getState().default.globalConfig!);
   const idxm = tour.idxm;
   if (idxm) {
+    const revision = getExpectedRevision(tour.updatedAt);
+    if (revision === undefined) throw new Error('The copied demo version could not be verified.');
     const tourDataFile = await api<null, TourData>(duplicatedTour.dataFileUri.href);
     // update the old screen index with new one
     const newEntities: typeof tourDataFile.entities = {};
@@ -1772,12 +1838,10 @@ const duplicateGivenTour = async (
       });
     }
 
-    await api<ReqRecordEdit, ApiResp<RespDemoEntity>>('/recordtredit', {
-      auth: true,
-      body: {
-        rid: duplicatedTour.rid,
-        editData: JSON.stringify(tourDataFile),
-      },
+    await journal.request<ReqRecordEdit, ApiResp<RespDemoEntity>>('final-save', '/recordtredit', {
+      rid: duplicatedTour.rid,
+      editData: JSON.stringify(tourDataFile),
+      expectedRevision: revision,
     });
   }
   const updatedTourResp = await api<ReqTourPropUpdate, ApiResp<RespDemoEntity>>('/updtrprop', {
@@ -1789,7 +1853,7 @@ const duplicateGivenTour = async (
     method: 'POST'
   });
 
-  return processRawTourData(updatedTourResp.data, getState().default.commonConfig!, getState().default.globalConfig!);
+  return updatedTourResp.data;
 };
 
 // INFO this is commented out as createDefaultTour performance is very slow
@@ -1998,8 +2062,8 @@ export function loadDemoHubAndData(
 
     try {
       const respDemoHub = loadPublishedData
-        ? await api<null, ApiResp<RespDemoEntity>>(`https://${process.env.REACT_APP_DATA_CDN}/${process.env.REACT_APP_DATA_CDN_QUALIFIER}/pdh/${demoHubRid}/0_d_data.json?ts=${newTs}`)
-        : await api<null, ApiResp<RespDemoEntity>>(`/dh?rid=${demoHubRid}`);
+        ? await api<null, ApiResp<RespDemoEntity>>(`${dataCdnBaseUrl()}/${process.env.REACT_APP_DATA_CDN_QUALIFIER}/pdh/${demoHubRid}/0_d_data.json?ts=${newTs}`)
+        : await api<null, ApiResp<RespDemoEntity>>(`/dh?rid=${encodeURIComponent(demoHubRid)}`, { auth: true });
 
       const demoHub = processRawDemoHubData(
         respDemoHub.data,
@@ -2081,15 +2145,15 @@ export interface TDeleteDemoHub {
 
 export function deleteDemoHub(rid: string) {
   return async (dispatch: Dispatch<TDeleteDemoHub>, getState: () => TState) => {
-    dispatch({
-      type: ActionType.DELETE_DEMOHUB_DATA,
-      rid,
-    });
     await api<ReqDemoHubRid, ApiResp<RespDemoEntity[]>>('/deldh', {
       auth: true,
       body: {
         rid
       }
+    });
+    dispatch({
+      type: ActionType.DELETE_DEMOHUB_DATA,
+      rid,
     });
   };
 }
@@ -2657,7 +2721,12 @@ export function upateTourDataUsingLLM(
             if (!tour.screens || !tour.screens[0].thumbnail) {
               throw new Error('Could not get theme data');
             }
-            const imageUrl = new URL(`${state.default.commonConfig.commonAssetPath}${tour.screens[0].thumbnail}`);
+            const imageUrl = thumbnailUrl(
+              tour.screens[0].thumbnail,
+              state.default.commonConfig.commonAssetPath,
+              undefined,
+              tour.screens[0].thumbnailData
+            );
             const exisitingPalette: guide_theme = {
               backgroundColor: tourData.opts.annotationBodyBackgroundColor._val,
               borderColor: tourData.opts.annotationBodyBackgroundColor._val,

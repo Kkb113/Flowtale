@@ -5,6 +5,7 @@ import * as GTags from '../../../common-styled';
 import { ModalState } from '../types';
 
 interface Props {
+    name: string;
     changeModalState : Dispatch<SetStateAction<ModalState>>
 }
 
@@ -40,6 +41,7 @@ function DemoOptionsMenu(props : Props) : JSX.Element {
       placement="right"
     >
       <Button
+        aria-label={`Actions for ${props.name}`}
         size="small"
         shape="circle"
         id="TG-3"

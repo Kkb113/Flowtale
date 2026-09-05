@@ -1,4 +1,5 @@
 import { SerNode } from '@fable/common/dist/types';
+import { setElementRedacted } from '../redaction';
 
 export const hideChildren = (el: HTMLElement): void => {
   Array.from(el.children).forEach(child => {
@@ -29,18 +30,15 @@ export const unhideChildren = (el: HTMLElement): void => {
 };
 
 export const addImgMask = (el: HTMLElement, resizedImgSrc: string, originalImgSrc: string): string => {
-  const originalStyleAttrs = el.getAttribute('style');
-  const maskStyles = `${originalStyleAttrs || ''};
+  const { width, height } = el.getBoundingClientRect();
+  const maskStyles = `width:${width}px;height:${height}px;
   background-image: url(${resizedImgSrc}), url(${originalImgSrc}) !important;
   background-position: center !important;
   background-repeat: no-repeat !important;
   background-size: cover !important;
   `;
 
-  el.setAttribute(
-    'style',
-    maskStyles
-  );
+  setElementRedacted(el, true, maskStyles);
 
   return maskStyles;
 };

@@ -12,12 +12,10 @@ public interface Routes {
 
   /* === Routes w/o authentication === */
   String HEALTH = "/health";
-  String DEBUG = "/debug";
   String GET_COMMON_CONFIG = "/cconfig";
-  String GET_SCREEN = "/screen";
-  String GET_TOUR = "/tour";
   String REPUBLISH_DATA_FILE_ONLY = "repub/entity/rid/{rid}";
   String GET_TOUR_BY_ID = "/tour/by/id/{id}";
+  String GET_TOUR_BY_RID_INTERNAL = "/tour/by/rid/{rid}";
   @Deprecated
   String LOG_USER_EVENTS = "/lue";
   @Deprecated
@@ -39,6 +37,9 @@ public interface Routes {
 
   /* === Routes with authentication === */
   String __BEHIND_LOGIN__ = "/f"; // f => behind spring security [F]ilters for authentication
+  String GET_SCREEN = __BEHIND_LOGIN__ + "/screen";
+  String GET_TOUR = __BEHIND_LOGIN__ + "/tour";
+  String DRAFT_ASSET = __BEHIND_LOGIN__ + "/draft/{kind}/{rid}/{filename}";
   String IAM = __BEHIND_LOGIN__ + "/iam";
   String NEW_ORG = __BEHIND_LOGIN__ + "/neworg";
   String GET_ORG = __BEHIND_LOGIN__ + "/org";
@@ -77,6 +78,7 @@ public interface Routes {
   String ONBOARDING_TOUR_PREVIEW_ONLY = __BEHIND_LOGIN__ + "/onbtrspreview";
   String TRANSCODE_VIDEO = __BEHIND_LOGIN__ + "/vdt";
   String TRANSCODE_AUDIO = __BEHIND_LOGIN__ + "/audt";
+  String MEDIA_JOB = __BEHIND_LOGIN__ + "/mediajobs/{id}";
   String RESIZE_IMG = __BEHIND_LOGIN__ + "/rzeimg";
   String CHECKOUT = __BEHIND_LOGIN__ + "/checkout";
   String GET_SUBSCRIPTION = __BEHIND_LOGIN__ + "/subs";
@@ -122,7 +124,7 @@ public interface Routes {
   String UPDATE_DEMO_HUB_PROP = __BEHIND_LOGIN__ + "/updtdhprops";
   String DELETE_DEMO_HUB = __BEHIND_LOGIN__ + "/deldh";
   String GET_ALL_DEMO_HUB = __BEHIND_LOGIN__ + "/dhs";
-  String GET_DEMO_HUB = "/dh";
+  String GET_DEMO_HUB = __BEHIND_LOGIN__ + "/dh";
   String PUBLISH_DEMO_HUB = __BEHIND_LOGIN__ + "/pubdh";
   String RECORD_EDIT_DEMO_HUB = __BEHIND_LOGIN__ + "/recorddhedit";
   String NEW_LLM_RUN = __BEHIND_LOGIN__ + "/llmrun";

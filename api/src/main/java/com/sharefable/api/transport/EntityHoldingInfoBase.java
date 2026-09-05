@@ -2,6 +2,7 @@ package com.sharefable.api.transport;
 
 import com.fasterxml.jackson.annotation.JsonSubTypes;
 import com.fasterxml.jackson.annotation.JsonTypeInfo;
+import com.fasterxml.jackson.annotation.JsonProperty;
 import lombok.Data;
 
 import java.io.Serializable;
@@ -10,6 +11,7 @@ import java.util.Random;
 
 @JsonTypeInfo(
     use = JsonTypeInfo.Id.NAME,
+    include = JsonTypeInfo.As.EXISTING_PROPERTY,
     property = "type"
 )
 @JsonSubTypes({
@@ -23,12 +25,12 @@ import java.util.Random;
 public abstract class EntityHoldingInfoBase implements Serializable {
     private final Long __id = new Random().nextLong() & 0xffffffffL;
 
-    @JsonTypeInfo(use = JsonTypeInfo.Id.NAME)
+    @JsonProperty(access = JsonProperty.Access.READ_ONLY)
     public abstract String getType();
 
     public boolean equals(Object o) {
         if (this == o) return true;
-        if (!(o instanceof JobProcessingInfo that)) return false;
+        if (!(o instanceof EntityHoldingInfoBase that)) return false;
         return Objects.equals(get__id(), that.get__id());
     }
 

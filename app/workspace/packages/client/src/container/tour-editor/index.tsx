@@ -3,6 +3,7 @@ import {
   JourneyData,
   IAnnotationConfig,
   ITourDataOpts,
+  ITourLoaderData,
   ITourDiganostics,
   LoadingStatus,
   ScreenData,
@@ -16,7 +17,7 @@ import {
 import React, { ReactElement } from 'react';
 import { connect } from 'react-redux';
 import { Tooltip, Button, Alert } from 'antd';
-import { ReqTourPropUpdate, RespOrg, RespSubscription, RespUser, ScreenType } from '@fable/common/dist/api-contract';
+import { ReqTourPropUpdate, RespCommonConfig, RespOrg, RespSubscription, RespUser, ScreenType } from '@fable/common/dist/api-contract';
 import { ArrowLeftOutlined } from '@ant-design/icons';
 import { createLiteralProperty, getDefaultLiteralTourOpts, getDefaultTourOpts, getRandomId } from '@fable/common/dist/utils';
 import { DemoCommandHistory, DemoEditHistoryResult, DemoEditPlan } from '@fable/common/dist/demo-edit';
@@ -37,6 +38,8 @@ import {
   loadTourAndData,
   publishTour,
   renameScreen,
+  recordLoaderData,
+  saveLocalLoaderData,
   saveEditChunks,
   saveGlobalEditChunks,
   saveTourData,
@@ -62,7 +65,6 @@ import {
   IdxEditItem,
   TourDataChangeFn,
   NavFn,
-  IAnnotationConfigWithScreen,
   DestinationAnnotationPosition,
   ScreenPickerData,
   Timeline,
@@ -89,6 +91,10 @@ import {
   processGlobalEditsWithElpath
 } from '../../utils';
 import ChunkSyncManager, { SyncStatus, SyncTarget, Tx } from './chunk-sync-manager';
+import { buildAnnotationTimeline } from './annotation-timeline';
+import SaveRecoveryPanel from './save-recovery-panel';
+import LoaderPersistenceContext from './loader-persistence-context';
+import EditorSessionBoundary, { RegisterEditorDrain } from './editor-session-boundary';
 import {
   getAnnotationByRefId,
   addNewAnn,
@@ -103,6 +109,9 @@ import { SCREEN_DIFFS_SUPPORTED_VERSION } from '../../constants';
 import InfoCon from '../../component/info-con';
 
 interface IDispatchProps {
+  saveLocalLoaderData: (tour: P_RespTour, data: ITourLoaderData) => void;
+  recordLoaderData: (tour: P_RespTour, data: ITourLoaderData, revision?: number) => Promise<number | undefined>;
+  ensureScreenData: (rid: string) => Promise<void>;
   publishTour: (tour: P_RespTour) => Promise<boolean>,
   loadScreenAndData: (rid: string) => void;
   saveEditChunks: (screen: P_RespScreen, editChunks: AllEdits<ElEditType>, serDom: SerNode) => void;
@@ -141,6 +150,9 @@ interface IDispatchProps {
 }
 
 const mapDispatchToProps = (dispatch: any): IDispatchProps => ({
+  saveLocalLoaderData: (tour, data) => dispatch(saveLocalLoaderData(tour, data)),
+  recordLoaderData: (tour, data, revision) => dispatch(recordLoaderData(tour, data, revision)),
+  ensureScreenData: (rid) => dispatch(loadScreenAndData(rid, true, true)),
   publishTour: (tour) => dispatch(publishTour(tour)),
   loadScreenAndData: (rid: string) => dispatch(loadScreenAndData(rid, true)),
   loadTourWithDataAndCorrespondingScreens: (rid: string) => dispatch(loadTourAndData(rid, true)),
@@ -180,45 +192,7 @@ const mapDispatchToProps = (dispatch: any): IDispatchProps => ({
 });
 
 const getTimeline = (allAnns: AnnotationPerScreen[], tour: P_RespTour): Timeline => {
-  const timeline: Timeline = [];
-
-  const screenHash: Record<number, P_RespScreen> = {};
-  const flatAnns: Record<string, IAnnotationConfigWithScreen> = {};
-  for (const annPerScreen of allAnns) {
-    screenHash[annPerScreen.screen.id] = annPerScreen.screen;
-    for (const ann of annPerScreen.annotations) {
-      flatAnns[ann.refId] = {
-        ...ann,
-        screen: annPerScreen.screen,
-        stepNumber: ''
-      };
-    }
-  }
-
-  // get first anns
-  const firstAnns: IAnnotationConfigWithScreen[] = [];
-  Object.values(flatAnns).forEach(ann => {
-    const prevBtn = getAnnotationBtn(ann, 'prev')!;
-    if (!prevBtn.hotspot || prevBtn.hotspot.actionType === 'open') {
-      firstAnns.push(ann);
-    }
-  });
-
-  firstAnns.forEach(firstAnn => {
-    const singleTimeline: IAnnotationConfigWithScreen[] = [];
-    let ann = firstAnn;
-    while (true) {
-      singleTimeline.push(ann);
-
-      const nextBtn = getAnnotationBtn(ann, 'next')!;
-      if (!nextBtn.hotspot || nextBtn.hotspot.actionType === 'open') {
-        break;
-      }
-      const nextAnnRefId = nextBtn.hotspot.actionValue._val.split('/')[1];
-      ann = flatAnns[nextAnnRefId];
-    }
-    timeline.push(singleTimeline);
-  });
+  const timeline = buildAnnotationTimeline(allAnns);
 
   const localStoreTimeline = getFableTimelineOrder();
 
@@ -236,6 +210,7 @@ const getTimeline = (allAnns: AnnotationPerScreen[], tour: P_RespTour): Timeline
 };
 
 interface IAppStateProps {
+  commonConfig: RespCommonConfig | null;
   subs: P_RespSubscription | null;
   org: RespOrg | null;
   tour: P_RespTour | null;
@@ -352,6 +327,7 @@ const mapStateToProps = (state: TState): IAppStateProps => {
   }
 
   return {
+    commonConfig: state.default.commonConfig,
     subs: state.default.subs,
     org: state.default.org,
     tour: state.default.currentTour,
@@ -387,7 +363,7 @@ interface IOwnProps {
   title: string;
 }
 
-type IProps = IOwnProps &
+type IProps = { registerDrain?: RegisterEditorDrain } & IOwnProps &
   IAppStateProps &
   IDispatchProps &
   WithRouterProps<{
@@ -396,6 +372,7 @@ type IProps = IOwnProps &
     annotationId?: string;
   }>;
 interface IOwnStateProps {
+  syncStatus: SyncStatus | null;
   alertMsg: string;
   showScreenPicker: boolean;
   screenPickerData: ScreenPickerData;
@@ -413,13 +390,18 @@ class TourEditor extends React.PureComponent<IProps, IOwnStateProps> {
 
   private static LOCAL_STORAGE_KEY_PREFIX_GLOBAL_EDIT_CHUNK = `${TourEditor.LOCAL_STORAGE_KEY_PREFIX}/globaleditchunk`;
 
+  private static LOCAL_STORAGE_KEY_PREFIX_LOADER = `${TourEditor.LOCAL_STORAGE_KEY_PREFIX}/loader`;
+
   private chunkSyncManager: ChunkSyncManager | null = null;
 
   private readonly commandHistory = new DemoCommandHistory();
 
+  private disposed = false;
+
   constructor(props: IProps) {
     super(props);
     this.state = {
+      syncStatus: null,
       alertMsg: '',
       showScreenPicker: false,
       screenPickerData: {
@@ -439,10 +421,13 @@ class TourEditor extends React.PureComponent<IProps, IOwnStateProps> {
     this.props.loadTourWithDataAndCorrespondingScreens(this.props.match.params.tourId);
     setEventCommonState(CmnEvtProp.TOUR_URL, createIframeSrc(`/demo/${this.props.match.params.tourId}`));
     this.chunkSyncManager = new ChunkSyncManager(SyncTarget.LocalStorage, TourEditor.LOCAL_STORAGE_KEY_PREFIX, {
+      acceptsKey: this.isCurrentDemoJournal,
       onSyncNeeded: this.flushEdits,
       onStatusChange: this.onSyncStatusChange,
       onAcknowledged: this.onSyncAcknowledged,
     });
+    const manager = this.chunkSyncManager;
+    this.props.registerDrain?.(() => manager.end());
     document.addEventListener('keydown', this.onEditorKeyDown);
     if (this.props.match.params.screenId) {
       this.props.loadScreenAndData(this.props.match.params.screenId);
@@ -451,7 +436,16 @@ class TourEditor extends React.PureComponent<IProps, IOwnStateProps> {
   }
 
   componentDidUpdate(prevProps: Readonly<IProps>, prevState: Readonly<IOwnStateProps>): void {
-    this.chunkSyncManager?.startIfNotAlreadyStarted(this.onLocalEditsLeft);
+    if (this.props.isTourLoaded && this.props.tour?.rid === this.props.match.params.tourId) {
+      this.chunkSyncManager?.startIfNotAlreadyStarted(this.onLocalEditsLeft);
+    }
+    if (this.props.isScreenLoaded && this.props.screen && this.props.screenData
+      && (!prevProps.isScreenLoaded || prevProps.screen?.rid !== this.props.screen.rid)) {
+      this.chunkSyncManager?.replayPending(
+        key => key === this.getStorageKeyForType('edit-chunk', `${this.props.screen!.id}/${this.props.screen!.rid}`),
+        this.onLocalEditsLeft
+      );
+    }
     if (prevProps.match.params.screenId !== this.props.match.params.screenId && this.props.match.params.screenId) {
       this.props.loadScreenAndData(this.props.match.params.screenId);
     }
@@ -523,7 +517,19 @@ class TourEditor extends React.PureComponent<IProps, IOwnStateProps> {
     this.props.navigate(`/demo/${this.props.tour!.rid}`);
   };
 
-  onLocalEditsLeft = (key: string, edits: AllEdits<ElEditType> | TourDataWoScheme | AllGlobalElEdits<ElEditType>): void => {
+  private isCurrentDemoJournal = (key: string): boolean => {
+    const tour = this.props.tour;
+    if (!tour || tour.rid !== this.props.match.params.tourId) return false;
+    return key === `${TourEditor.LOCAL_STORAGE_KEY_PREFIX_TOUR_DATA}/${tour.rid}`
+      || key === `${TourEditor.LOCAL_STORAGE_KEY_PREFIX_GLOBAL_EDIT_CHUNK}/${tour.rid}`
+      || key === `${TourEditor.LOCAL_STORAGE_KEY_PREFIX_LOADER}/${tour.rid}`
+      || this.props.flattenedScreens.some(screen => (
+        key === `${TourEditor.LOCAL_STORAGE_KEY_PREFIX_EDIT_CHUNK}/${screen.id}/${screen.rid}`
+      ));
+  };
+
+  onLocalEditsLeft = (key: string, edits: AllEdits<ElEditType> | TourDataWoScheme | AllGlobalElEdits<ElEditType> | ITourLoaderData): void => {
+    if (!this.isCurrentDemoJournal(key)) return;
     if (key.startsWith(TourEditor.LOCAL_STORAGE_KEY_PREFIX_EDIT_CHUNK)
       && this.props.screen && this.props.screenData && key.endsWith(this.props.screen.rid)) {
       this.props.saveEditChunks(this.props.screen, edits as AllEdits<ElEditType>, this.props.screenData.docTree);
@@ -531,6 +537,8 @@ class TourEditor extends React.PureComponent<IProps, IOwnStateProps> {
       this.props.saveTourData(this.props.tour, edits as TourDataWoScheme);
     } else if (key.startsWith(TourEditor.LOCAL_STORAGE_KEY_PREFIX_GLOBAL_EDIT_CHUNK)) {
       this.props.saveGlobalEditChunks(edits as AllGlobalElEdits<ElEditType>);
+    } else if (key.startsWith(TourEditor.LOCAL_STORAGE_KEY_PREFIX_LOADER) && this.props.tour) {
+      this.props.saveLocalLoaderData(this.props.tour, edits as ITourLoaderData);
     }
   };
 
@@ -608,6 +616,7 @@ class TourEditor extends React.PureComponent<IProps, IOwnStateProps> {
   };
 
   componentWillUnmount(): void {
+    this.disposed = true;
     document.removeEventListener('keydown', this.onEditorKeyDown);
     this.chunkSyncManager?.end();
     this.props.clearCurrentScreenSelection();
@@ -781,44 +790,45 @@ class TourEditor extends React.PureComponent<IProps, IOwnStateProps> {
     }
 
     return (
-      <GTags.ColCon>
-        <GTags.BodyCon style={{
-          height: '100%',
-          background: '#fff',
-          overflowY: 'hidden',
-        }}
-        >
-          <div style={{ position: 'relative', height: '100%', width: '100%' }}>
-            <Canvas
-              allGlobalEdits={this.props.allGlobalEdits}
-              updateTourProp={this.props.updateTourProp}
-              subs={this.props.subs}
-              publishTour={this.props.publishTour}
-              applyAnnGrpIdMutations={
+      <LoaderPersistenceContext.Provider value={this.queueLoaderData}>
+        <GTags.ColCon>
+          <GTags.BodyCon style={{
+            height: '100%',
+            background: '#fff',
+            overflowY: 'hidden',
+          }}
+          >
+            <div style={{ position: 'relative', height: '100%', width: '100%' }}>
+              <Canvas
+                allGlobalEdits={this.props.allGlobalEdits}
+                updateTourProp={this.props.updateTourProp}
+                subs={this.props.subs}
+                publishTour={this.props.publishTour}
+                applyAnnGrpIdMutations={
                 (mutations: AnnUpdateType, tx: Tx) => this.applyAnnGrpIdMutations(mutations, tx)
               }
-              applyAnnButtonLinkMutations={this.applyAnnButtonLinkMutations}
-              tourOpts={this.props.tourOpts}
-              key={this.props.tour?.rid}
-              toAnnotationId={this.props.match.params.annotationId || ''}
-              allAnnotationsForTour={this.props.allAnnotationsForTour}
-              navigate={this.navigateTo}
-              navigateBackToTour={this.navigateBackToTour}
-              setAlert={this.showHideAlert}
-              onTourDataChange={this.onTourDataChange}
-              tour={this.props.tour!}
-              timeline={this.props.timeline}
-              commitTx={this.commitTx}
-              shouldShowScreenPicker={this.updateShowScreenPicker}
-              screen={this.props.screen!}
-              screenData={this.props.screenData!}
-              allEdits={this.props.allEdits}
-              allAnnotationsForScreen={this.props.allAnnotationsForScreen}
-              onScreenEditStart={this.onScreenEditStart}
-              onScreenEditFinish={this.onScreenEditFinish}
-              onScreenEditChange={this.onScreenEditChange}
-              onGlobalEditChange={this.onGlobalEditChange}
-              onAnnotationCreateOrChange={
+                applyAnnButtonLinkMutations={this.applyAnnButtonLinkMutations}
+                tourOpts={this.props.tourOpts}
+                key={this.props.tour?.rid}
+                toAnnotationId={this.props.match.params.annotationId || ''}
+                allAnnotationsForTour={this.props.allAnnotationsForTour}
+                navigate={this.navigateTo}
+                navigateBackToTour={this.navigateBackToTour}
+                setAlert={this.showHideAlert}
+                onTourDataChange={this.onTourDataChange}
+                tour={this.props.tour!}
+                timeline={this.props.timeline}
+                commitTx={this.commitTx}
+                shouldShowScreenPicker={this.updateShowScreenPicker}
+                screen={this.props.screen!}
+                screenData={this.props.screenData!}
+                allEdits={this.props.allEdits}
+                allAnnotationsForScreen={this.props.allAnnotationsForScreen}
+                onScreenEditStart={this.onScreenEditStart}
+                onScreenEditFinish={this.onScreenEditFinish}
+                onScreenEditChange={this.onScreenEditChange}
+                onGlobalEditChange={this.onGlobalEditChange}
+                onAnnotationCreateOrChange={
                 (screenId, c, actionType, o, tx) => this.onTourDataChange(
                   'annotation-and-theme',
                   screenId,
@@ -826,53 +836,53 @@ class TourEditor extends React.PureComponent<IProps, IOwnStateProps> {
                   tx
                 )
               }
-              isScreenLoaded={this.props.isScreenLoaded}
-              shouldShowOnlyScreen={Boolean(
-                this.props.match.params.screenId && !this.props.match.params.annotationId
-              )}
-              updateScreen={this.props.updateScreen}
-              onTourJourneyChange={this.onOptsOrJourneyDataChange}
-              headerProps={{
-                subs: this.props.subs,
-                navigateToWhenLogoIsClicked: '/demos',
-                titleElOnLeft: this.getHeaderTxtEl(),
-                leftElGroups: this.getHeaderLeftGroup(),
-                principal: this.props.principal,
-                org: this.props.org,
-                titleText: this.props.screen?.displayName,
-                renameScreen: (newVal: string) => this.props.renameScreen(this.props.screen!, newVal),
-                showRenameIcon: this.isInCanvas(),
-                tourMainValidity: this.props.tourMainVailidity,
-                screenDiagnostics: this.getCurrentScreenDiagnostics(),
-                isAutoSaving: this.props.isAutoSaving,
-                tour: this.props.tour,
-                isJourneyCTASet: this.state.isJourneyCTASet,
-                lastAnnHasCTA: this.state.lastAnnHasCTA,
-                onSiteDataChange: this.onSiteDataChange,
-                showCalendar: true,
-                isEntryPointMediaAnn: this.state.isEntryPointMediaAnn,
-                vanityDomains: this.props.vanityDomains,
-                checkCredit: this.props.getSubscriptionOrCheckoutNew
-              }}
-              journey={this.props.journey!}
-              manifestPath={`${this.props.pubTourAssetPath}${this.props.tour?.rid}/${this.props.manifestFileName}`}
-              elpathKey={this.props.elpathKey}
-              updateElPathKey={this.props.updateElPathKey}
-              featurePlan={this.props.featurePlan}
-              globalOpts={this.props.globalOpts!}
-            />
+                isScreenLoaded={this.props.isScreenLoaded}
+                shouldShowOnlyScreen={Boolean(
+                  this.props.match.params.screenId && !this.props.match.params.annotationId
+                )}
+                updateScreen={this.props.updateScreen}
+                onTourJourneyChange={this.onOptsOrJourneyDataChange}
+                headerProps={{
+                  subs: this.props.subs,
+                  navigateToWhenLogoIsClicked: '/demos',
+                  titleElOnLeft: this.getHeaderTxtEl(),
+                  leftElGroups: this.getHeaderLeftGroup(),
+                  principal: this.props.principal,
+                  org: this.props.org,
+                  titleText: this.props.screen?.displayName,
+                  renameScreen: (newVal: string) => this.props.renameScreen(this.props.screen!, newVal),
+                  showRenameIcon: this.isInCanvas(),
+                  tourMainValidity: this.props.tourMainVailidity,
+                  screenDiagnostics: this.getCurrentScreenDiagnostics(),
+                  isAutoSaving: this.props.isAutoSaving,
+                  tour: this.props.tour,
+                  isJourneyCTASet: this.state.isJourneyCTASet,
+                  lastAnnHasCTA: this.state.lastAnnHasCTA,
+                  onSiteDataChange: this.onSiteDataChange,
+                  showCalendar: true,
+                  isEntryPointMediaAnn: this.state.isEntryPointMediaAnn,
+                  vanityDomains: this.props.vanityDomains,
+                  checkCredit: this.props.getSubscriptionOrCheckoutNew
+                }}
+                journey={this.props.journey!}
+                manifestPath={`${this.props.pubTourAssetPath}${this.props.tour?.rid}/${this.props.manifestFileName}`}
+                elpathKey={this.props.elpathKey}
+                updateElPathKey={this.props.updateElPathKey}
+                featurePlan={this.props.featurePlan}
+                globalOpts={this.props.globalOpts!}
+              />
 
-          </div>
-          {this.state.alertMsg && <Alert
-            style={{ position: 'absolute', left: '0', bottom: '0', width: '100%', zIndex: 101 }}
-            message="Error"
-            description={this.state.alertMsg}
-            type="warning"
-            showIcon
-            closable
-            onClose={() => this.setState({ alertMsg: '' })}
-          />}
-          {this.state.showScreenPicker
+            </div>
+            {this.state.alertMsg && <Alert
+              style={{ position: 'absolute', left: '0', bottom: '0', width: '100%', zIndex: 101 }}
+              message="Error"
+              description={this.state.alertMsg}
+              type="warning"
+              showIcon
+              closable
+              onClose={() => this.setState({ alertMsg: '' })}
+            />}
+            {this.state.showScreenPicker
             && <ScreenPicker
               hideScreenPicker={() => { this.setState({ showScreenPicker: false }); }}
               screenPickerMode={this.state.screenPickerData.screenPickerMode}
@@ -896,8 +906,15 @@ class TourEditor extends React.PureComponent<IProps, IOwnStateProps> {
               showCloseButton={this.state.screenPickerData.showCloseButton}
               position={this.state.screenPickerData.position}
             />}
-        </GTags.BodyCon>
-      </GTags.ColCon>
+            {this.chunkSyncManager && this.props.commonConfig && this.props.globalOpts && <SaveRecoveryPanel
+              manager={this.chunkSyncManager}
+              status={this.state.syncStatus}
+              config={this.props.commonConfig}
+              global={this.props.globalOpts}
+            />}
+          </GTags.BodyCon>
+        </GTags.ColCon>
+      </LoaderPersistenceContext.Provider>
     );
   }
 
@@ -1004,14 +1021,30 @@ class TourEditor extends React.PureComponent<IProps, IOwnStateProps> {
     }
   };
 
+  private queueLoaderData = (data: ITourLoaderData): void => {
+    if (!this.props.tour || !this.chunkSyncManager) throw new Error('The editor is not ready to save.');
+    const revision = getExpectedRevision(this.props.tour.updatedAt);
+    if (revision === undefined) throw new Error('The saved version could not be verified.');
+    this.chunkSyncManager.add(
+      `${TourEditor.LOCAL_STORAGE_KEY_PREFIX_LOADER}/${this.props.tour.rid}`,
+      data,
+      (_, incoming) => incoming,
+      undefined,
+      revision
+    );
+    this.props.saveLocalLoaderData(this.props.tour, data);
+  };
+
   private flushEdits = async (
     key: string,
-    value: AllEdits<ElEditType> | TourDataWoScheme,
+    value: AllEdits<ElEditType> | TourDataWoScheme | ITourLoaderData,
     expectedRevision?: number
   ): Promise<{revision?: number}> => {
+    if (!this.isCurrentDemoJournal(key)) throw new Error('Cached edits belong to another demo; they remain queued');
     let revision: number | undefined;
     if (key.startsWith(TourEditor.LOCAL_STORAGE_KEY_PREFIX_EDIT_CHUNK)) {
       const screenIdRid = key.substring(TourEditor.LOCAL_STORAGE_KEY_PREFIX_EDIT_CHUNK.length + 1);
+      await this.props.ensureScreenData(screenIdRid.slice(screenIdRid.indexOf('/') + 1));
       const tValue = value as AllEdits<ElEditType>;
       revision = await this.props.flushEditChunksToMasterFile(screenIdRid, tValue, expectedRevision);
     } else if (key.startsWith(TourEditor.LOCAL_STORAGE_KEY_PREFIX_TOUR_DATA)) {
@@ -1022,23 +1055,28 @@ class TourEditor extends React.PureComponent<IProps, IOwnStateProps> {
       const tourRid = key.substring(TourEditor.LOCAL_STORAGE_KEY_PREFIX_GLOBAL_EDIT_CHUNK.length + 1);
       const tValue = value as AllGlobalElEdits<ElEditType>;
       revision = await this.props.flushGlobalEditChunksToMasterFile(tourRid, tValue, expectedRevision);
+    } else if (key.startsWith(TourEditor.LOCAL_STORAGE_KEY_PREFIX_LOADER) && this.props.tour) {
+      revision = await this.props.recordLoaderData(this.props.tour, value as ITourLoaderData, expectedRevision);
     }
     return { revision };
   };
 
   private onSyncStatusChange = (status: SyncStatus): void => {
-    if (status.type === 'saving' || status.type === 'retrying') {
+    if (this.disposed) return;
+    // A successful sibling write must not hide another chunk's unresolved conflict.
+    if (['conflict', 'retrying', 'recovery'].includes(status.type)) this.setState({ syncStatus: status });
+    else if (status.type === 'idle' && !this.chunkSyncManager?.getPendingEntries().length) this.setState({ syncStatus: null });
+    if ((status.type === 'saving' || status.type === 'retrying')
+      && !status.key?.startsWith(TourEditor.LOCAL_STORAGE_KEY_PREFIX_LOADER)) {
       this.props.startAutoSaving();
-    }
-    if (status.type === 'conflict') {
-      this.showHideAlert('This demo changed in another session. Your local changes are safe; reload before retrying them.');
     }
   };
 
   private onSyncAcknowledged = (key: string, acknowledgement: {revision?: number}): void => {
     if (acknowledgement.revision === undefined || !this.props.tour) return;
     const affectsTour = key.startsWith(TourEditor.LOCAL_STORAGE_KEY_PREFIX_TOUR_DATA)
-      || key.startsWith(TourEditor.LOCAL_STORAGE_KEY_PREFIX_GLOBAL_EDIT_CHUNK);
+      || key.startsWith(TourEditor.LOCAL_STORAGE_KEY_PREFIX_GLOBAL_EDIT_CHUNK)
+      || key.startsWith(TourEditor.LOCAL_STORAGE_KEY_PREFIX_LOADER);
     if (!affectsTour) return;
     const tourRidSuffix = `/${this.props.tour.rid}`;
     this.chunkSyncManager?.rebaseExpectedRevisions(
@@ -1047,6 +1085,7 @@ class TourEditor extends React.PureComponent<IProps, IOwnStateProps> {
         && (
           pendingKey.startsWith(TourEditor.LOCAL_STORAGE_KEY_PREFIX_TOUR_DATA)
           || pendingKey.startsWith(TourEditor.LOCAL_STORAGE_KEY_PREFIX_GLOBAL_EDIT_CHUNK)
+          || pendingKey.startsWith(TourEditor.LOCAL_STORAGE_KEY_PREFIX_LOADER)
         ),
       acknowledgement.revision
     );
@@ -1165,7 +1204,7 @@ class TourEditor extends React.PureComponent<IProps, IOwnStateProps> {
         if (storedEdits === null) {
           return edits;
         }
-        return mergeEdits(storedEdits, edits);
+        return mergeEdits(storedEdits, edits, true);
       },
       undefined,
       getExpectedRevision(forScreen.updatedAt)
@@ -1182,7 +1221,7 @@ class TourEditor extends React.PureComponent<IProps, IOwnStateProps> {
         if (storedEdits === null) {
           return edits;
         }
-        return mergeGlobalEdits(storedEdits, edits);
+        return mergeGlobalEdits(storedEdits, edits, true);
       },
       undefined,
       getExpectedRevision(this.props.tour?.updatedAt)
@@ -1246,7 +1285,15 @@ class TourEditor extends React.PureComponent<IProps, IOwnStateProps> {
   };
 }
 
+function TourEditorWithSession(props: IProps): JSX.Element {
+  return (
+    <EditorSessionBoundary key={props.match.params.tourId} demoId={props.match.params.tourId}>
+      {registerDrain => <TourEditor {...props} registerDrain={registerDrain} />}
+    </EditorSessionBoundary>
+  );
+}
+
 export default connect<IAppStateProps, IDispatchProps, IOwnProps, TState>(
   mapStateToProps,
   mapDispatchToProps
-)(withRouter(TourEditor));
+)(withRouter(TourEditorWithSession));

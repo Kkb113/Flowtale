@@ -1,49 +1,39 @@
-const fs = require('fs');
-const path = require('path');
-const { exec } = require('child_process');
-const util = require('util');
+const fs = require('node:fs');
+const path = require('node:path');
+const schema = require('typescript-json-schema');
 
-const execPromise = util.promisify(exec);
-
-const BASE_PATH= "./src/json-schema";
-const OUT_PATH= `${BASE_PATH}/out`;
-
-// Function to get all TypeScript files in a directory
-function getTsFiles(dir) {
-  return fs.readdirSync(dir)
-    .filter(file => file.endsWith('.ts'))
-    .map(file => [path.join(dir, file), file.replace(/\.ts$/, '')]);
+// Generate everything before touching outputs. A compiler error must never leave
+// a successful build with missing or stale AI tool contracts.
+function generateSchemas(source, output) {
+  const files = fs.readdirSync(source).filter(file => file.endsWith('.ts')).sort();
+  if (!files.length) throw new Error('No schema sources found');
+  const generated = files.map(file => {
+    const program = schema.getProgramFromFiles([path.join(source, file)], {});
+    const result = schema.generateSchema(program, '*', { required: true });
+    if (!result) throw new Error(`Schema generation failed: ${file}`);
+    return [file.replace(/\.ts$/, '.json'), `${JSON.stringify(result, null, 4)}\n`];
+  });
+  fs.mkdirSync(output, { recursive: true });
+  for (const [name, content] of generated) {
+    const target = path.join(output, name);
+    const staged = `${target}.tmp`;
+    fs.writeFileSync(staged, content);
+    fs.renameSync(staged, target);
+  }
+  const names = new Set(generated.map(([name]) => name));
+  for (const name of fs.readdirSync(output)) {
+    if (name.endsWith('.json') && !names.has(name)) fs.unlinkSync(path.join(output, name));
+  }
+  return generated.length;
 }
 
-// Function to run a command on a file
-async function runCommandOnFile(filePath, fileName) {
+module.exports = { generateSchemas };
+if (require.main === module) {
+  const source = path.join(__dirname, '..', 'src', 'json-schema');
   try {
-    const outPath = `${OUT_PATH}/${fileName}.json`;
-    const op = await execPromise(`npx typescript-json-schema -o "${outPath}" --required "${filePath}" "*"`);
-    console.log(`Gen ${filePath} -> ${outPath}`);
-    if (op.stdout) console.log(op.stdout);
-    if (op.stderr) console.error(op.stderr);
+    console.log(`Generated ${generateSchemas(source, path.join(source, 'out'))} schemas`);
   } catch (error) {
-    console.error(`Error gen json schema for file ${fileName}:`, error);
+    console.error(error.message);
+    process.exitCode = 1;
   }
 }
-
-// Main function
-(async function () {
-  const directory = BASE_PATH + "/"; 
-
-  const tsFiles = getTsFiles(directory);
-
-  // Delete out directory if it exists
-  if (fs.existsSync(OUT_PATH)) {
-    fs.rmSync(OUT_PATH, { recursive: true, force: true });
-    console.log(`Deleted existing directory: ${OUT_PATH}`);
-  }
-  // Create out directory
-  fs.mkdirSync(OUT_PATH, { recursive: true });
-  console.log(`Created directory: ${OUT_PATH}`);
-
-  for (const [filePath, fileName] of tsFiles) {
-    await runCommandOnFile(filePath, fileName);
-  }
-})();

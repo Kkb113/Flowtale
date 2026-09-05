@@ -2,11 +2,15 @@ package com.sharefable.api.transport;
 
 import lombok.Builder;
 import lombok.Data;
+import lombok.NoArgsConstructor;
+import lombok.AllArgsConstructor;
 import lombok.EqualsAndHashCode;
 
 @GenerateTSDef
 @Builder
 @Data
+@NoArgsConstructor
+@AllArgsConstructor
 @EqualsAndHashCode(callSuper = true)
 public class MediaTypeEntityHolding extends EntityHoldingInfoBase {
     public static final String DISCRIMINATOR = "media";

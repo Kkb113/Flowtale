@@ -12,13 +12,14 @@ import com.sharefable.api.entity.Org;
 import com.sharefable.api.entity.User;
 import com.sharefable.api.repo.*;
 import com.sharefable.api.service.vendor.SlackMsgService;
-import com.sharefable.api.transport.InviteCode;
 import com.sharefable.api.transport.NfEvents;
-import com.sharefable.api.transport.PvtAssetType;
 import com.sharefable.api.transport.ReqExperimentConfig;
 import com.sharefable.api.transport.req.*;
 import com.sharefable.api.transport.resp.*;
 import io.sentry.Sentry;
+import jakarta.persistence.EntityManager;
+import jakarta.persistence.LockModeType;
+import jakarta.persistence.PersistenceContext;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.lang3.StringUtils;
 import org.javatuples.Pair;
@@ -27,6 +28,8 @@ import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.web.server.ResponseStatusException;
 
 import java.io.IOException;
@@ -53,8 +56,12 @@ public class WorkspaceService extends ServiceBase {
   private final AwsAmplifyCustomDomainService customDomainService;
   private final EntityConfigService entityConfigService;
   private final SubscriptionService subscriptionService;
+  private final WorkspaceInvitationService invitationService;
   private final AppSettings settings;
   private final ObjectMapper mapper = new ObjectMapper();
+
+  @PersistenceContext(unitName = "db1")
+  private EntityManager entityManager;
 
   @Autowired
   public WorkspaceService(OrgRepo orgRepo,
@@ -71,7 +78,8 @@ public class WorkspaceService extends ServiceBase {
                           EntityConfigKVRepo entityConfigKVRepo,
                           AwsAmplifyCustomDomainService customDomainService,
                           EntityConfigService entityConfigService,
-                          SubscriptionService subscriptionService) {
+                          SubscriptionService subscriptionService,
+                          WorkspaceInvitationService invitationService) {
     super(settings, s3Service, s3Config, screenRepo, demoEntityRepo);
     this.orgRepo = orgRepo;
     this.userRepo = userRepo;
@@ -86,6 +94,7 @@ public class WorkspaceService extends ServiceBase {
     this.customDomainService = customDomainService;
     this.entityConfigService = entityConfigService;
     this.subscriptionService = subscriptionService;
+    this.invitationService = invitationService;
   }
 
   // is in the format test CNAME d3uxmturbrrjns.cloudfront.net
@@ -167,46 +176,10 @@ public class WorkspaceService extends ServiceBase {
   }
 
   @Transactional(readOnly = true)
-  public RespOrg getOrgByEmail(String email) {
-    Pair<String, Boolean> domainInf = Utils.getDomainFromEmailForRespectiveEmail(email);
-    String emailDomain = domainInf.getValue0();
-    Set<Org> org = orgRepo.findOrgByDomain(emailDomain);
-    return org.isEmpty() ? RespOrg.Empty() : RespOrg.from(org.iterator().next());
-  }
-
-  @Transactional
-  public RespUser assignUserToImplicitOrg(User user) {
-    Pair<String, Boolean> domainInf = Utils.getDomainFromEmailForRespectiveEmail(user.getEmail());
-    String emailDomain = domainInf.getValue0();
-    Set<Org> orgs = orgRepo.findOrgByDomain(emailDomain);
-
-    if (!orgs.isEmpty()) {
-      Org org = orgs.iterator().next();
-      user.setBelongsToOrg(org.getId());
-      user.setOrgs(orgs);
-      userRepo.save(user);
-    } else {
-      log.error("No org present but call to assignUserToImplicitOrg is done by user {}", user);
-    }
-    return RespUser.from(user);
-  }
-
-  @Transactional(readOnly = true)
   public RespUser getUserWithOrgData(User user) {
     RespUser respUser = RespUser.from(user);
-    // No DB operation should happen if the user is part of an org already.
-    if (user.getBelongsToOrg() == null) {
-      Pair<String, Boolean> domainInf = Utils.getDomainFromEmailForRespectiveEmail(user.getEmail());
-      String emailDomain = domainInf.getValue0();
-      // If user is not part of an org then find out is there implicit org that is present as part of user's
-      // email domain
-      Set<Org> orgs = orgRepo.findOrgByDomain(emailDomain);
-      respUser.setOrgAssociation(!orgs.isEmpty()
-        ? RespUser.UserOrgAssociation.Implicit
-        : RespUser.UserOrgAssociation.NA);
-    } else {
-      respUser.setOrgAssociation(RespUser.UserOrgAssociation.Explicit);
-    }
+    respUser.setOrgAssociation(user.getBelongsToOrg() == null
+      ? RespUser.UserOrgAssociation.NA : RespUser.UserOrgAssociation.Explicit);
     return respUser;
   }
 
@@ -311,7 +284,6 @@ public class WorkspaceService extends ServiceBase {
     AssetFilePath filePath = s3Config.getQualifiedPathFor(
       S3Config.AssetType.UserGenerated, user.getBelongsToOrg().toString(), filename);
     URL url = s3Service.preSignedUrl(filePath, contentType);
-    log.warn("content type {} url {}", contentType, url);
     return RespUploadUrl.builder()
       .url(url.toString())
       .cdnPath(filePath.getS3UriToFile())
@@ -320,29 +292,40 @@ public class WorkspaceService extends ServiceBase {
       .build();
   }
 
-  public RespUploadUrl getPvtPreSignedUrl(String contentType, String prefix, String filename, PvtAssetType assetType) {
-    AssetFilePath filePath = s3Config.getQualifiedPathFor(switch (assetType) {
-      case MarkedImgs -> S3Config.AssetType.PvtTourLlmOpsAssets;
-      case TourInputData -> S3Config.AssetType.PvtTourInputData;
-    }, prefix, filename);
-    URL url = s3Service.preSignedUrl(filePath, contentType);
-    log.warn("content type {} url {}", contentType, url);
-    return RespUploadUrl.builder()
-      .url(url.toString())
-      .expiry("default")
-      .filename(filename)
-      .build();
-  }
-
+  @Transactional
   public RespUser activateOrDeactivateUser(Long targetUserId, Boolean activate, User reqByUser) {
-    Optional<User> maybeUser = userRepo.findById(targetUserId);
-    if (maybeUser.isEmpty()) return null;
-    User targetUser = maybeUser.get();
-    if (!Objects.equals(targetUser.getBelongsToOrg(), reqByUser.getBelongsToOrg()))
-      throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Users not from same org");
-
-    User changedUser = userService.setUserActiveOrInactive(targetUser, activate);
-    return RespUser.from(changedUser);
+    Long orgId = reqByUser.getBelongsToOrg();
+    Org org = orgId == null ? null : orgRepo.findById(orgId).orElse(null);
+    if (org == null || org.getCreatedBy() == null || !reqByUser.hasActiveMembership(orgId)
+      || !Objects.equals(org.getCreatedBy().getId(), reqByUser.getId())) {
+      throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Only the workspace owner can change member access");
+    }
+    if (activate == null || targetUserId == null) throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Member and access status are required");
+    if (Objects.equals(org.getCreatedBy().getId(), targetUserId)) {
+      throw new ResponseStatusException(HttpStatus.CONFLICT, "The workspace owner's access cannot be disabled here");
+    }
+    User target = entityManager.find(User.class, targetUserId);
+    if (target == null) throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Member not found");
+    entityManager.refresh(target, LockModeType.PESSIMISTIC_WRITE, Map.of("jakarta.persistence.lock.timeout", 10000));
+    if (target.getOrgs() == null || target.getOrgs().stream().noneMatch(value -> Objects.equals(value.getId(), orgId))) {
+      throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Member not found in this workspace");
+    }
+    Set<Long> disabled = new HashSet<>(target.getDisabledOrgIds() == null ? Set.of() : target.getDisabledOrgIds());
+    if (activate && !Boolean.TRUE.equals(target.getActive())) {
+      // Preserve legacy denial in every other workspace when explicitly restoring this one.
+      target.getOrgs().forEach(value -> disabled.add(value.getId()));
+      target.setActive(true);
+    }
+    if (activate) disabled.remove(orgId); else disabled.add(orgId);
+    target.setDisabledOrgIds(disabled);
+    if (!activate && Objects.equals(target.getBelongsToOrg(), orgId)) target.setBelongsToOrg(null);
+    userRepo.save(target);
+    TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+      @Override public void afterCommit() { subscriptionService.updateNoOfSeatInSubscription(orgId); }
+    });
+    RespUser response = RespUser.from(target);
+    response.setActive(target.hasActiveMembership(orgId));
+    return response;
   }
 
   @Transactional
@@ -393,44 +376,42 @@ public class WorkspaceService extends ServiceBase {
 
   @Transactional
   public RespNewInvite createNewInvite(ReqNewInvite newInvite, User user) {
-    Optional<Org> maybeOrg = orgRepo.findById(user.getBelongsToOrg());
-    if (maybeOrg.isEmpty()) return RespNewInvite.Empty();
-
-    InviteCode inviteCode = InviteCode.builder()
-      .invitedEmail(newInvite.getInvitedEmail())
-      .orgId(maybeOrg.get().getId())
-      .build();
-    String inviteCodeString;
-
-    try {
-      inviteCodeString = mapper.writeValueAsString(inviteCode);
-    } catch (Exception e) {
-      log.error("Something went wrong while converting invite code to string", e);
-      throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "Something went wrong while converting invite code to string");
-    }
-
-    return RespNewInvite.builder()
-      .code(Base64.getEncoder().encodeToString(inviteCodeString.getBytes()))
-      .build();
+    return RespNewInvite.builder().code(invitationService.issue(newInvite, user)).build();
   }
 
   @Transactional(readOnly = true)
   public List<RespOrg> getAllOrgForUser(User user) {
     Set<Org> orgs = new HashSet<>(user.getOrgs() != null ? user.getOrgs() : Set.of());
-    return orgs.stream().map(RespOrg::from).collect(Collectors.toList());
+    return orgs.stream().filter(org -> user.hasActiveMembership(org.getId())).map(RespOrg::from).collect(Collectors.toList());
   }
 
   @Transactional
   public Pair<RespUser, RespOrg> assignOrgToUser(ReqAssignOrgToUser body, User user) {
-    Optional<Org> maybeOrg = orgRepo.findById(body.orgId());
-    if (maybeOrg.isEmpty()) return Pair.with(RespUser.from(user), RespOrg.Empty());
-
-    Set<Org> orgs = user.getOrgs();
+    // Authentication can load memberships before this transaction starts. Refresh under a
+    // per-user write lock so simultaneous invitation acceptances cannot overwrite each other.
+    User member = entityManager.find(User.class, user.getId());
+    if (member == null) throw new ResponseStatusException(HttpStatus.NOT_FOUND, "User not found");
+    entityManager.refresh(member, LockModeType.PESSIMISTIC_WRITE, Map.of("jakarta.persistence.lock.timeout", 10000));
+    if (!Boolean.TRUE.equals(member.getActive())) throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Account is disabled");
+    Set<Org> orgs = new HashSet<>(member.getOrgs() == null ? Set.of() : member.getOrgs());
+    Long orgId = body.inviteCode() != null && body.inviteCode().isPresent()
+      ? invitationService.accept(body.inviteCode().get(), member) : body.orgId();
+    if (member.getDisabledOrgIds() != null && member.getDisabledOrgIds().contains(orgId)) {
+      throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Your access to this workspace is disabled. Ask its owner to restore it.");
+    }
+    boolean existingMember = orgs.stream().anyMatch(org -> Objects.equals(org.getId(), orgId));
+    if (!existingMember && (body.inviteCode() == null || body.inviteCode().isEmpty())) {
+      throw new ResponseStatusException(HttpStatus.FORBIDDEN, "A valid invitation is required to join this workspace");
+    }
+    Optional<Org> maybeOrg = orgRepo.findById(orgId);
+    if (maybeOrg.isEmpty()) throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Workspace not found");
     orgs.add(maybeOrg.get());
-    user.setBelongsToOrg(maybeOrg.get().getId());
-    user.setOrgs(orgs);
-    User savedUser = userRepo.save(user);
-    subscriptionService.updateNoOfSeatInSubscription(body.orgId());
+    member.setBelongsToOrg(maybeOrg.get().getId());
+    member.setOrgs(orgs);
+    User savedUser = userRepo.save(member);
+    if (!existingMember) TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+      @Override public void afterCommit() { subscriptionService.updateNoOfSeatInSubscription(orgId); }
+    });
     return Pair.with(RespUser.from(savedUser), RespOrg.from(maybeOrg.get()));
   }
 

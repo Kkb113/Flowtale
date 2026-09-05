@@ -10,6 +10,7 @@ import {
 } from '@fable/common/dist/types';
 import { sleep } from '@fable/common/dist/utils';
 import React, { Suspense, lazy } from 'react';
+import { sanitizeRichText } from '../../rich-text-sanitizer';
 import {
   CtaClickedInternal,
   CtaFrom
@@ -177,7 +178,7 @@ export class AnnotationContent extends React.PureComponent<{
                   fontColor={this.props.opts.annotationFontColor._val}
                   ref={this.contentRef}
                   borderRadius={this.props.opts.borderRadius._val}
-                  dangerouslySetInnerHTML={{ __html: this.props.config.bodyContent }}
+                  dangerouslySetInnerHTML={{ __html: sanitizeRichText(this.props.config.bodyContent) }}
                   className="f-text"
                 />
               </form>
@@ -187,7 +188,7 @@ export class AnnotationContent extends React.PureComponent<{
                 fontColor={this.props.opts.annotationFontColor._val}
                 ref={this.contentRef}
                 borderRadius={this.props.opts.borderRadius._val}
-                dangerouslySetInnerHTML={{ __html: this.props.config.bodyContent }}
+                dangerouslySetInnerHTML={{ __html: sanitizeRichText(this.props.config.bodyContent) }}
                 className="f-text"
               />
             )

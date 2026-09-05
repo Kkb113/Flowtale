@@ -21,9 +21,9 @@ import {
   IdxEncodingTypeMask,
   IdxEncodingTypeText
 } from '../../../types';
-import { hideChildren, hideChildrenInSerDom, unhideChildren } from './creator-actions';
 import { getSerNodesElPathFromFids } from '../../../utils';
 import { EMPTY_EL_PATH } from '../../../constants';
+import { redactSerializedNode, setElementRedacted } from './redaction';
 
 export const showOrHideEditsFromEl = (e: EditItem, isShowEdits: boolean, el: HTMLElement): void => {
   if (el.dataset.deleted === 'true') return;
@@ -84,9 +84,7 @@ export const showOrHideEditsFromEl = (e: EditItem, isShowEdits: boolean, el: HTM
 
     case ElEditType.Blur: {
       const tEncoding = encoding as EditValueEncoding[ElEditType.Blur];
-      el.style.filter = isShowEdits
-        ? tEncoding[IdxEncodingTypeBlur.NEW_FILTER_VALUE]!
-        : tEncoding[IdxEncodingTypeBlur.OLD_FILTER_VALUE]!;
+      setElementRedacted(el, isShowEdits && (tEncoding[IdxEncodingTypeBlur.NEW_BLUR_VALUE] || 0) > 0);
       break;
     }
 
@@ -101,21 +99,11 @@ export const showOrHideEditsFromEl = (e: EditItem, isShowEdits: boolean, el: HTM
     case ElEditType.Mask: {
       const tEncoding = encoding as EditValueEncoding[ElEditType.Mask];
 
-      if (isShowEdits) {
-        el.setAttribute(
-          'style',
-          `${tEncoding[IdxEncodingTypeMask.NEW_STYLE]}`
-        );
-
-        hideChildren(el);
-      } else {
-        el.setAttribute(
-          'style',
-          `${tEncoding[IdxEncodingTypeMask.OLD_STYLE]}`
-        );
-
-        unhideChildren(el);
-      }
+      setElementRedacted(
+        el,
+        isShowEdits && tEncoding[IdxEncodingTypeMask.NEW_STYLE] != null,
+        tEncoding[IdxEncodingTypeMask.NEW_STYLE] || ''
+      );
 
       break;
     }
@@ -125,21 +113,24 @@ export const showOrHideEditsFromEl = (e: EditItem, isShowEdits: boolean, el: HTM
   }
 };
 
-export const getSerNodeFromPath = (path: string, docTree: SerNode): SerNode => {
+export const getSerNodeFromPath = (path: string, docTree: SerNode): SerNode | undefined => {
   const pathArray = path.split('.');
-  let serNode = docTree;
+  if (pathArray[0] !== '1') return undefined;
+  let serNode: SerNode | undefined = docTree;
 
   if (path === '1') return serNode;
 
   for (const id of pathArray.slice(1)) {
-    serNode = serNode.chldrn[+id];
+    if (!/^\d+$/.test(id)) return undefined;
+    serNode = serNode?.chldrn[+id];
   }
 
   return serNode;
 };
 
-export const applyEditsToSerDom = (allEdits: EditItem[], screenData: ScreenData): ScreenData => {
+export const applyEditsToSerDom = (allEdits: EditItem[], screenData: ScreenData, authoring = false): ScreenData => {
   const mem: Record<string, SerNode> = {};
+  const redactions: { node: SerNode; rect?: { width: number; height: number }; hidden: boolean; maskStyle?: string }[] = [];
   const fids: string[] = allEdits
     .filter(item => (
       item[IdxEditItem.FID]
@@ -161,12 +152,18 @@ export const applyEditsToSerDom = (allEdits: EditItem[], screenData: ScreenData)
     } else if (path in mem) {
       node = mem[path];
     } else {
-      node = getSerNodeFromPath(path, screenData.docTree);
+      const resolved = getSerNodeFromPath(path, screenData.docTree);
+      if (!resolved) continue;
+      node = resolved;
       mem[path] = node;
     }
 
     if (edit[IdxEditItem.TYPE] === ElEditType.Text) {
       const txtEncodingVal = edit[IdxEditItem.ENCODING] as EncodingTypeText;
+      if (node.type === Node.TEXT_NODE) {
+        node.props.textContent = txtEncodingVal[IdxEncodingTypeText.NEW_VALUE];
+        continue;
+      }
       node.chldrn = [];
 
       const commentSerNode: SerNode = {
@@ -204,12 +201,9 @@ export const applyEditsToSerDom = (allEdits: EditItem[], screenData: ScreenData)
 
     if (edit[IdxEditItem.TYPE] === ElEditType.InputValue) {
       const inputEncodingVal = edit[IdxEditItem.ENCODING] as EncodingTypeInputValue;
-      if (node.attrs.value) {
-        node.attrs.value = inputEncodingVal[IdxEncodingTypeInput.NEW_VALUE]!;
-      }
-      if (node.props.nodeProps && node.props.nodeProps.value) {
-        node.props.nodeProps.value = inputEncodingVal[IdxEncodingTypeInput.NEW_VALUE]!;
-      }
+      const value = inputEncodingVal[IdxEncodingTypeInput.NEW_VALUE] ?? '';
+      node.attrs.value = value;
+      node.props.nodeProps = { ...node.props.nodeProps, value };
     }
 
     if (edit[IdxEditItem.TYPE] === ElEditType.Image) {
@@ -228,11 +222,9 @@ export const applyEditsToSerDom = (allEdits: EditItem[], screenData: ScreenData)
 
     if (edit[IdxEditItem.TYPE] === ElEditType.Blur) {
       const blurEncodingVal = edit[IdxEditItem.ENCODING] as EncodingTypeBlur;
-
-      const originalStyleAttrs = node.attrs.style;
-      node.attrs.style = `${originalStyleAttrs || ''};
-        filter: ${blurEncodingVal[IdxEncodingTypeBlur.NEW_FILTER_VALUE]!};
-      `;
+      if ((blurEncodingVal[IdxEncodingTypeBlur.NEW_BLUR_VALUE] || 0) > 0) {
+        redactions.push({ node, rect: blurEncodingVal[IdxEncodingTypeBlur.REDACTION_RECT], hidden: false });
+      }
     }
 
     if (edit[IdxEditItem.TYPE] === ElEditType.Display) {
@@ -242,15 +234,24 @@ export const applyEditsToSerDom = (allEdits: EditItem[], screenData: ScreenData)
       node.attrs.style = `${originalStyleAttrs || ''};
         display: ${dispEncodingVal[IdxEncodingTypeDisplay.NEW_VALUE]!};
       `;
+      if (dispEncodingVal[IdxEncodingTypeDisplay.NEW_VALUE]?.trim().toLowerCase() === 'none') {
+        redactions.push({ node, hidden: true });
+      }
     }
 
     if (edit[IdxEditItem.TYPE] === ElEditType.Mask) {
       const maskEncodingVal = edit[IdxEditItem.ENCODING] as EncodingTypeMask;
       const maskStyled = maskEncodingVal[IdxEncodingTypeMask.NEW_STYLE]!;
 
-      hideChildrenInSerDom(node);
-      node.attrs.style = maskStyled;
+      if (maskStyled !== null && maskStyled !== undefined) redactions.push({ node, hidden: false, maskStyle: maskStyled });
     }
+  }
+
+  for (const { node, rect, hidden, maskStyle } of redactions) {
+    if (authoring && !hidden) {
+      node.attrs['data-fable-pending-redaction'] = 'true';
+      if (maskStyle) node.attrs['data-fable-pending-mask'] = maskStyle;
+    } else if (!authoring) redactSerializedNode(node, rect || node.props.rect, hidden, maskStyle);
   }
 
   return screenData;

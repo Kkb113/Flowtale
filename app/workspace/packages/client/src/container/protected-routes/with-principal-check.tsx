@@ -1,4 +1,5 @@
 import React from 'react';
+import { Alert, Button, Space } from 'antd';
 import { connect } from 'react-redux';
 import { Navigate, Outlet } from 'react-router-dom';
 import { withAuth0, WithAuth0Props } from '@auth0/auth0-react';
@@ -15,34 +16,9 @@ import FullPageTopLoader from '../../component/loader/full-page-top-loader';
 import { OnboardingSteps, USER_ONBOARDING_ROUTE } from '../user-onboarding';
 import { FABLE_LOCAL_STORAGE_ORG_ID_KEY } from '../../constants';
 import WithPlanCheck from './with-plan-check';
+import { shutdownSupportWidget, updateSupportWidget } from '../../support-widget';
 
 export const ENV = process.env.REACT_APP_ENVIRONMENT;
-
-function addSupportBot(name: string, email: string, createdAt: Date): void {
-  const id = 'fable-support-bot';
-
-  let script = document.getElementById(id);
-  if (script) return;
-
-  script = document.createElement('script');
-  script.setAttribute('id', id);
-  script.innerHTML = `
-  window.intercomSettings = {
-    api_base: "https://api-iam.intercom.io",
-    app_id: "btay1o4i",
-    user_id: "${email}",
-    name: "${name}",
-    email: "${email}",
-    created_at: "${createdAt}",
-    custom_launcher_selector:'.support-bot-open'
-  };
-
-
- // We pre-filled your app ID in the widget URL: 'https://widget.intercom.io/widget/btay1o4i'
-  (function(){var w=window;var ic=w.Intercom;if(typeof ic==="function"){ic('reattach_activator');ic('update',w.intercomSettings);}else{var d=document;var i=function(){i.c(arguments);};i.q=[];i.c=function(args){i.q.push(args);};w.Intercom=i;var l=function(){var s=d.createElement('script');s.type='text/javascript';s.async=true;s.src='https://widget.intercom.io/widget/btay1o4i';var x=d.getElementsByTagName('script')[0];x.parentNode.insertBefore(s,x);};if(document.readyState==='complete'){l();}else if(w.attachEvent){w.attachEvent('onload',l);}else{w.addEventListener('load',l,false);}}})();
-  `;
-  document.body.appendChild(script);
-}
 
 interface IDispatchProps {
   iam: () => Promise<void>;
@@ -71,9 +47,14 @@ const mapStateToProps = (state: TState): IAppStateProps => ({
 interface IOwnProps { }
 type IProps = IOwnProps & IAppStateProps & IDispatchProps & WithAuth0Props & WithRouterProps;
 
-interface IOwnStateProps {}
+interface IOwnStateProps {
+  error: string | null;
+  failedOperation: 'account' | 'workspace' | null;
+}
 
 class WithPrincipalCheck extends React.PureComponent<IProps, IOwnStateProps> {
+  private mounted = false;
+
   constructor(props: IProps) {
     super(props);
     const { getAccessTokenSilently } = this.props.auth0;
@@ -87,24 +68,30 @@ class WithPrincipalCheck extends React.PureComponent<IProps, IOwnStateProps> {
       return accessToken;
     });
 
-    this.state = {};
+    this.state = { error: null, failedOperation: null };
   }
 
   componentDidMount(): void {
+    this.mounted = true;
     if (this.props.auth0.isAuthenticated) {
-      this.props.iam();
+      this.load('account');
     }
   }
 
   componentDidUpdate(prevProps: Readonly<IProps>): void {
     if (prevProps.auth0.isAuthenticated !== this.props.auth0.isAuthenticated && this.props.auth0.isAuthenticated) {
-      this.props.iam();
+      this.load('account');
+    }
+
+    if (prevProps.auth0.isAuthenticated && !this.props.auth0.isAuthenticated) {
+      resetProductAnalytics();
+      shutdownSupportWidget();
     }
 
     if (prevProps.lcOrgId !== this.props.lcOrgId && this.props.lcOrgId && (
       !this.props.org || (this.props.org.id !== this.props.lcOrgId)
     )) {
-      this.props.fetchOrg();
+      this.load('workspace');
     }
 
     if (prevProps.principal !== this.props.principal && this.props.principal) {
@@ -114,15 +101,31 @@ class WithPrincipalCheck extends React.PureComponent<IProps, IOwnStateProps> {
 
       try {
         setProductAnalyticsUserId(this.props.principal.email);
-        if (ENV === 'prod') addSupportBot(this.props.principal.firstName, this.props.principal.email, this.props.principal.createdAt);
-        if (!this.props.auth0.isAuthenticated) {
-          resetProductAnalytics();
-        }
+        if (ENV === 'prod') updateSupportWidget(this.props.principal.firstName, this.props.principal.email, this.props.principal.createdAt);
       } catch (e) {
         raiseDeferredError(e as Error);
       }
     }
   }
+
+  componentWillUnmount(): void {
+    this.mounted = false;
+  }
+
+  private load = async (operation: 'account' | 'workspace'): Promise<void> => {
+    if (this.mounted) this.setState({ error: null, failedOperation: null });
+    try {
+      if (operation === 'account') await this.props.iam();
+      else await this.props.fetchOrg();
+    } catch (error) {
+      if (this.mounted) {
+        this.setState({
+          error: error instanceof Error ? error.message : 'The service could not be reached.',
+          failedOperation: operation,
+        });
+      }
+    }
+  };
 
   getQueryParmsStrWithQuestionMark = () => {
     const queryParamStr = this.props.searchParams.toString();
@@ -133,6 +136,16 @@ class WithPrincipalCheck extends React.PureComponent<IProps, IOwnStateProps> {
     const inviteCode = this.props.searchParams.get('ic');
     const pathname = this.props.location.pathname.toLowerCase();
     const shouldCheckPlan = !(pathname.startsWith('/billing') || pathname.startsWith('/welcome'));
+
+    if (this.state.error) {
+      return (
+        <Space direction="vertical" style={{ padding: 32 }}>
+          <Alert type="error" showIcon message="Your account could not be loaded" description={this.state.error} />
+          <Button onClick={() => this.load(this.state.failedOperation || 'account')}>Retry</Button>
+          <Button href="/logout">Sign in again</Button>
+        </Space>
+      );
+    }
 
     if (this.props.auth0.isLoading) {
       return <FullPageTopLoader showLogo />;
@@ -161,7 +174,10 @@ class WithPrincipalCheck extends React.PureComponent<IProps, IOwnStateProps> {
       }
     }
 
-    return shouldCheckPlan ? <WithPlanCheck /> : <Outlet />;
+    if (localStorageOrgId && (!this.props.org || this.props.org.id !== Number(localStorageOrgId))) {
+      return <FullPageTopLoader showLogo />;
+    }
+    return shouldCheckPlan ? <WithPlanCheck key={this.props.org?.id} /> : <Outlet />;
   }
 }
 

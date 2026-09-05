@@ -5,18 +5,8 @@ import { withRouter, WithRouterProps } from '../../router-hoc';
 import { TState } from '../../reducer';
 import { P_RespSubscription, P_RespTour } from '../../entity-processor';
 import LoaderEditor from '../../component/loader-editor';
-import { recordLoaderData, startAutosavingLoader } from '../../action/creator';
+import LoaderPersistenceContext from '../tour-editor/loader-persistence-context';
 import { FeatureForPlan } from '../../plans';
-
-interface IDispatchProps {
-    recordLoaderData: (tour: P_RespTour, loader: ITourLoaderData) => void;
-    startAutosavingLoader: () => void;
-}
-
-const mapDispatchToProps = (dispatch: any): IDispatchProps => ({
-  recordLoaderData: (tour, loader) => dispatch(recordLoaderData(tour, loader)),
-  startAutosavingLoader: () => dispatch(startAutosavingLoader()),
-});
 
 interface IAppStateProps {
   tourLoaderData: ITourLoaderData | null,
@@ -40,7 +30,7 @@ interface IOwnProps {
 
 type IProps = IOwnProps &
   IAppStateProps &
-  IDispatchProps &
+
   WithRouterProps<{
     tourId: string;
     screenId: string;
@@ -53,21 +43,24 @@ type IOwnStateProps = {
 class ScreenPicker extends React.PureComponent<IProps, IOwnStateProps> {
   render():JSX.Element {
     return (
-      <LoaderEditor
+      <LoaderPersistenceContext.Consumer>{save => <LoaderEditor
         subs={this.props.subs}
         data={this.props.tourLoaderData!}
         tour={this.props.tour!}
         closeEditor={this.props.closeEditor}
-        recordLoaderData={this.props.recordLoaderData}
+        recordLoaderData={(_tour, data) => {
+          if (!save) throw new Error('The editor is not ready to save.');
+          save(data);
+        }}
         isAutoSaving={this.props.isAutoSavingLoader}
-        startAutosavingLoader={this.props.startAutosavingLoader}
         featureForPlan={this.props.featureForPlan}
-      />
+      />}
+      </LoaderPersistenceContext.Consumer>
     );
   }
 }
 
-export default connect<IAppStateProps, IDispatchProps, IOwnProps, TState>(
+export default connect<IAppStateProps, {}, IOwnProps, TState>(
   mapStateToProps,
-  mapDispatchToProps
+  null
 )(withRouter(ScreenPicker));

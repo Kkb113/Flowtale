@@ -1,70 +1,37 @@
-import { ApiResp, PvtAssetType, RespUploadUrl } from '@fable/common/dist/api-contract';
+import { ApiResp, ResponseStatus, PvtAssetType, RespUploadUrl } from '@fable/common/dist/api-contract';
 import api from '@fable/common/dist/api';
-import raiseDeferredError from '@fable/common/dist/deferred-error';
-import { DBData } from '@fable/common/dist/db-utils';
+import { DBData, runDbRequest } from '@fable/common/dist/db-utils';
+import { uploadAsset } from '@fable/common/dist/upload';
 
-export function deleteDataFromDb(db: IDBDatabase, storeName: string, key: string) {
-  return new Promise((resolve, reject) => {
-    const transaction = db.transaction(storeName, 'readwrite');
-    const objectStore = transaction.objectStore(storeName);
-
-    const deleteRequest = objectStore.delete(key);
-
-    Promise.all([
-      new Promise(res => {
-        transaction.addEventListener('complete', () => {
-          res(key);
-        });
-      }),
-      new Promise(res => {
-        deleteRequest.onsuccess = function (event) {
-          res(key);
-        };
-      })
-    ]).then(([d]) => {
-      resolve(d);
-    });
-
-    deleteRequest.onerror = function (event) {
-      reject(new Error('Error deleting data from object store'));
+export async function deleteCompletedCapture(db: IDBDatabase, storeName: string, capture: DBData): Promise<void> {
+  await runDbRequest(db, storeName, 'readwrite', store => {
+    const request = store.get(capture.id);
+    request.onsuccess = () => {
+      const current = request.result as DBData | undefined;
+      // A new extension delivery may have replaced the one-slot capture while saving.
+      if (current && current.captureSessionId === capture.captureSessionId && current.screensData === capture.screensData) {
+        store.delete(capture.id);
+      }
     };
+    return request;
   });
 }
 
 export function getDataFromDb(db: IDBDatabase, storeName: string, key: string) {
-  return new Promise((resolve, reject) => {
-    const transaction = db.transaction(storeName, 'readonly');
-    const objectStore = transaction.objectStore(storeName);
-
-    const getRequest = objectStore.get(key);
-
-    getRequest.onsuccess = function (event) {
-      resolve(getRequest.result);
-    };
-
-    getRequest.onerror = function (event) {
-      reject(new Error('Error getting data from object store'));
-    };
-  });
+  return runDbRequest(db, storeName, 'readonly', store => store.get(key));
 }
 
 export const saveDbDataToAws = async (dbData: DBData, anonDemoId: string): Promise<void> => {
-  try {
-    const nameOfSerdomFile = 'index.json';
-    const contentType = 'application/json';
-    const data = await api<null, ApiResp<RespUploadUrl>>(`/getpvtuploadlink?te=${btoa(contentType)}&pre=${anonDemoId}&fe=${btoa(nameOfSerdomFile)}&t=${PvtAssetType.TourInputData}`, {
-      auth: true
-    });
-    const s3PresignedUploadUrl = data.data.url;
-
-    const res = await fetch(s3PresignedUploadUrl, {
-      method: 'PUT',
-      body: JSON.stringify(dbData),
-      headers: { 'Content-Type': contentType },
-    });
-  } catch (err) {
-    if (err instanceof Error) {
-      raiseDeferredError(err);
-    }
+  const nameOfSerdomFile = 'index.json';
+  const contentType = 'application/json';
+  const data = await api<null, ApiResp<RespUploadUrl>>(`/getpvtuploadlink?te=${encodeURIComponent(btoa(contentType))}&pre=${encodeURIComponent(anonDemoId)}&fe=${encodeURIComponent(btoa(nameOfSerdomFile))}&t=${PvtAssetType.TourInputData}`, {
+    auth: true
+  });
+  if (data.status === ResponseStatus.Failure || !data.data?.url) {
+    throw new Error('Could not prepare the capture archive upload. Retry to keep your capture.');
   }
+  const s3PresignedUploadUrl = data.data.url;
+
+  // Credentials from older extension versions are never part of a capture archive.
+  await uploadAsset(s3PresignedUploadUrl, JSON.stringify({ ...dbData, cookies: '[]' }), contentType);
 };

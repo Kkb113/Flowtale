@@ -45,20 +45,16 @@ public class UserService {
     if (!StringUtils.equalsIgnoreCase(user.getAuthId(), subject)) {
       // If user has logged in using one auth provider (google) and tries to login using another login
       // provider (email<>password) ask user to login using existing auth
-      log.error("{} is trying to login using subject {} but subject already exists {}",
-        user.getEmail(), user.getAuthId(), subject);
+      log.warn("Authentication identity does not match the existing account");
       throw new ResponseStatusException(HttpStatus.FORBIDDEN, objectMapper.writeValueAsString(
         Map.of("r", UnauthorizedReason.EmailIdExistsButLoginMethodDoesNotMatch)
       ));
     }
 
-    Long orgId = OrgContext.getCurrentOrgId();
-    User updatedUser = setLatestOrgForUser(user, orgId);
-
-    // If the user is deactivated any new auth attempt would mark the user as active.
-    // This is not ideal but for the timebeing this would do.
-    // Ideally any nonactive user has zero role based permission.
-    return setUserActiveOrInactive(updatedUser, true);
+    if (!Boolean.TRUE.equals(user.getActive())) {
+      throw new ResponseStatusException(HttpStatus.FORBIDDEN, "This account is disabled. Contact your workspace administrator.");
+    }
+    return setLatestOrgForUser(user, OrgContext.getCurrentOrgId());
   }
 
   public UserClaimFromAuth0 getUserClaimsFromAuth0(Jwt jwt) throws JsonProcessingException {
@@ -66,14 +62,6 @@ public class UserService {
     Object userDetailsClaim = claims.get("https://identity.sharefable.com/user");
     String userDetailsClaimStr = objectMapper.writeValueAsString(userDetailsClaim);
     return objectMapper.readValue(userDetailsClaimStr, UserClaimFromAuth0.class);
-  }
-
-  User setUserActiveOrInactive(User user, Boolean isActive) {
-    if (isActive == user.getActive()) return user;
-    user.setActive(isActive);
-    User changedUser = userRepo.save(user);
-    subService.updateNoOfSeatInSubscription(user.getBelongsToOrg());
-    return changedUser;
   }
 
   public User createNewUser(UserClaimFromAuth0 user, String authId) {
@@ -128,19 +116,24 @@ public class UserService {
 
 
   public User setLatestOrgForUser(User user, Long orgId) throws JsonProcessingException {
+    // A remembered workspace is a preference, never proof of current membership.
+    if (orgId == null && user.getBelongsToOrg() != null
+      && !user.hasActiveMembership(user.getBelongsToOrg())) {
+      user.setBelongsToOrg(null);
+    }
     if (orgId != null) {
       Set<Org> orgs = user.getOrgs();
       orgs = orgs == null ? Set.of() : orgs;
       boolean isOrgValid = false;
       for (Org org : orgs) {
-        if (Objects.equals(org.getId(), orgId)) {
+        if (Objects.equals(org.getId(), orgId) && user.hasActiveMembership(orgId)) {
           user.setBelongsToOrg(orgId);
           isOrgValid = true;
           break;
         }
       }
       if (!isOrgValid) {
-        log.error("orgId {} is passed but user {} is not associated with org", orgId, user.getEmail());
+        log.warn("Requested workspace membership could not be verified");
         throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, objectMapper.writeValueAsString(
           Map.of("r", UnauthorizedReason.OrgSuggestedButInvalidAssociation)
         ));

@@ -2,12 +2,14 @@ package com.sharefable.api.transport;
 
 import lombok.Builder;
 import lombok.Data;
+import lombok.NoArgsConstructor;
 import lombok.EqualsAndHashCode;
 import lombok.experimental.SuperBuilder;
 
 @GenerateTSDef
 @SuperBuilder(toBuilder = true)
 @Data
+@NoArgsConstructor
 @EqualsAndHashCode(callSuper = true)
 public class AudioTranscodingJobInfo extends JobProcessingInfo {
   public static final String DISCRIMINATOR = "TRANSCODE_AUDIO";

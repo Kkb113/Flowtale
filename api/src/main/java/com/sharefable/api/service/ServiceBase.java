@@ -7,6 +7,9 @@ import com.sharefable.api.common.Utils;
 import com.sharefable.api.config.AppSettings;
 import com.sharefable.api.config.S3Config;
 import com.sharefable.api.entity.DemoEntity;
+import com.sharefable.api.entity.EntityBase;
+import jakarta.persistence.EntityManager;
+import jakarta.persistence.PersistenceContext;
 import com.sharefable.api.entity.EntityBaseWithOwnership;
 import com.sharefable.api.entity.Screen;
 import com.sharefable.api.entity.User;
@@ -31,6 +34,21 @@ import java.util.*;
 
 @Slf4j
 public abstract class ServiceBase implements DefaultThumbnail {
+  @PersistenceContext
+  private EntityManager entityManager;
+
+  /** Return the database revision, including timestamp precision and update triggers. */
+  protected <T extends EntityBase> T refreshPersisted(T entity) {
+    entityManager.flush();
+    entityManager.refresh(entity);
+    return entity;
+  }
+
+  /** Lock and reload an already-associated row before copying its publication data. */
+  protected void lockSnapshotRow(EntityBase entity) {
+    entityManager.refresh(entity, jakarta.persistence.LockModeType.PESSIMISTIC_WRITE);
+  }
+
   private static final String PATH_TO_SCHEMA_FILE_FOR_TOUR_INDEX = "/data-schema/v=%s/tour/index.json";
   private static final String PATH_TO_SCHEMA_FILE_FOR_TOUR_LOADER = "/data-schema/v=%s/tour/loader.json";
   private static final String PATH_TO_SCHEMA_FILE_FOR_TOUR_EDITS = "/data-schema/v=%s/tour/edits.json";

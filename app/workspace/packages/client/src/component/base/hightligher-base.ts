@@ -322,6 +322,12 @@ export default abstract class HighlighterBase {
 
     let p = '';
     for (const id of elIdxs) {
+      if (!node) return null;
+      // A protected subtree becomes one block. Its former descendant anchors now
+      // point to that block, preserving guided navigation without retaining content.
+      if (node.nodeType === Node.ELEMENT_NODE && (node as HTMLElement).dataset.fableRedacted === 'true') {
+        return node as HTMLElement;
+      }
       p += `.${id}`;
       if ((node as HTMLElement).tagName && ((node as HTMLElement).tagName.toLowerCase() === 'iframe'
         || (node as HTMLElement).tagName.toLowerCase() === 'object')) {

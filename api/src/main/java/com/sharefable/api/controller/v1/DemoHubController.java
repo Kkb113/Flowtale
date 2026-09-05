@@ -56,8 +56,8 @@ public class DemoHubController {
   }
 
   @RequestMapping(value = Routes.GET_DEMO_HUB, method = RequestMethod.GET, produces = MediaType.APPLICATION_JSON_VALUE)
-  public ApiResp<RespDemoEntity> getDemoHub(@RequestParam("rid") String rid) {
-    RespDemoEntity tour = entityService.getEntityByRid(rid, false, false, TopLevelEntityType.DEMO_HUB);
+  public ApiResp<RespDemoEntity> getDemoHub(@RequestParam("rid") String rid, @AuthUser User user) {
+    RespDemoEntity tour = entityService.getDraftByRid(rid, false, TopLevelEntityType.DEMO_HUB, user);
     return ApiResp.<RespDemoEntity>builder().status(ApiResp.ResponseStatus.Success).data(tour).build();
   }
 

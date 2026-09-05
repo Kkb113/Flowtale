@@ -1,74 +1,20 @@
+# External database migrations only. For local Fable use node scripts/local-dev.mjs start from the repository root.
 services:
   schema_api:
-    image: flyway/flyway@sha256:be37029d12403cb198d4cbb5cec0e94068f8abcdecc3e03aa419309fa806e9a5
+    image: redgate/flyway:13.5@sha256:b4452f1052daf6c365352257a8b9d9aa927be00e8f3c1ac9a031ef9dd5e819d7
     container_name: fable-db-flyway
-    command: -url=${DB_CONN_URL_DOCKER} -schemas=migration -user=${DB_USER} -password=${DB_PWD} -connectRetries=60 migrate
+    command: -locations=filesystem:/flyway/migrations -url=${DB_CONN_URL_DOCKER} -schemas=migration -user=${DB_USER} -password=${DB_PWD} -connectRetries=60 migrate
     volumes:
-      - ./schema/api:/flyway/sql
+      - ./schema/api:/flyway/migrations
     profiles:
       - na
 
   schema_analytics:
-    image: flyway/flyway@sha256:be37029d12403cb198d4cbb5cec0e94068f8abcdecc3e03aa419309fa806e9a5
+    image: redgate/flyway:13.5@sha256:b4452f1052daf6c365352257a8b9d9aa927be00e8f3c1ac9a031ef9dd5e819d7
     container_name: fable-analytics-db-flyway
-    command: -url=${ANALYTICS_DB_CONN_URL_DOCKER} -schemas=migration -user=${ANALYTICS_DB_USER} -password=${ANALYTICS_DB_PWD} -connectRetries=60 migrate
+    command: -locations=filesystem:/flyway/migrations -url=${ANALYTICS_DB_CONN_URL_DOCKER} -schemas=migration -user=${ANALYTICS_DB_USER} -password=${ANALYTICS_DB_PWD} -connectRetries=60 migrate
     volumes:
-      - ./schema/analytics:/flyway/sql
+      - ./schema/analytics:/flyway/migrations
     profiles:
       - na
-
-  db:
-    image: mysql/mysql-server
-    container_name: fable-db
-    command: [ "--default-authentication-plugin=mysql_native_password" ]
-    environment:
-      - MYSQL_ROOT_PASSWORD=${DB_PWD}
-      - MYSQL_ROOT_HOST=%
-    volumes:
-      - mysql-data:/var/lib/mysql
-    ports:
-      - "3306:3306"
-    profiles:
-      - dev
-
-  pg_analytics:
-    image: postgres:16-alpine
-    container_name: fable-analytics-db
-    environment:
-      - POSTGRES_PASSWORD=${ANALYTICS_DB_PWD}
-      - POSTGRES_USER=${ANALYTICS_DB_USER}
-      - POSTGRES_DB=fable_analytics
-    volumes:
-      - postgres-data:/var/lib/postgresql/data
-    ports:
-      - "5432:5432"
-    profiles:
-      - dev
-
-  localstack:
-    image: localstack/localstack:3.8.1
-    container_name: fable-localstack
-    environment:
-      - SERVICES=s3,sqs
-      - AWS_DEFAULT_REGION=${AWS_SQS_REGION:-ap-south-1}
-      - ASSET_BUCKET_NAME=${ASSET_BUCKET_NAME:-flowtale-local-assets}
-      - PVT_ASSET_BUCKET_NAME=${PVT_ASSET_BUCKET_NAME:-pvt-mics}
-      - SQS_QUEUE_NAME=tour_app_queue
-    ports:
-      - "4566:4566"
-    volumes:
-      - localstack-data:/var/lib/localstack
-      - ./localstack/init-aws.sh:/etc/localstack/init/ready.d/init-aws.sh:ro
-    healthcheck:
-      test: [ "CMD", "curl", "-f", "http://localhost:4566/_localstack/health" ]
-      interval: 5s
-      timeout: 3s
-      retries: 20
-    profiles:
-      - dev
-
-volumes:
-  mysql-data:
-  postgres-data:
-  localstack-data:
 

@@ -25,11 +25,9 @@ interface IOwnStateProps {
 
 class RedirectFromP extends React.PureComponent<IProps, IOwnStateProps> {
   componentDidMount(): void {
-    const loc = window.location.toString();
-    const allParams = loc.split('?')[1];
-    const iframeUrl = `/embed/demo/${this.props.match.params.tourId}`;
-    const iframeUrlWithParams = allParams ? `${iframeUrl}?${allParams}` : iframeUrl;
-    window.location.replace(iframeUrlWithParams);
+    const { pathname, search, hash } = window.location;
+    const target = pathname.replace(/^\/p\/(?:demo|tour)\//, '/embed/demo/');
+    window.location.replace(target + search + hash);
   }
 
   render(): React.ReactNode {

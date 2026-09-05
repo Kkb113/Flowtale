@@ -294,7 +294,12 @@ export const ManualDemoContainer = styled.div`
     text-align: center;
 `;
 
-export const ManualDemo = styled.span`
+export const ManualDemo = styled.button.attrs({ type: 'button' })`
+  background: transparent;
+  border: 0;
+  padding: 0;
+  margin: 0 auto;
+  font-family: inherit;
   color: #424242;
   font-size: 1rem;
   text-decoration: dotted underline;

@@ -26,6 +26,8 @@ public class RespOrg extends ResponseBase {
   private String rid;
   private String displayName;
   private String thumbnail;
+  @com.sharefable.api.transport.OptionalPropInTS
+  private String thumbnailData;
   private OrgInfo info;
   private RespUser createdBy;
 

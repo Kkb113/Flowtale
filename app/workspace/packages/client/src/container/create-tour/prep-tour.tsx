@@ -1,169 +1,127 @@
 import React from 'react';
-import { connect } from 'react-redux';
-import { captureException } from '@sentry/react';
-import { sentryStartTransaction, sentryTxReport } from '@fable/common/dist/sentry';
-import { Progress } from 'antd';
-import { openDb, putDataInDb, DB_NAME, OBJECT_STORE, OBJECT_KEY, OBJECT_KEY_VALUE, DBData } from '@fable/common/dist/db-utils';
-import { getDataFromDb } from './db-utils';
-import { withRouter, WithRouterProps } from '../../router-hoc';
-import { TState } from '../../reducer';
+import { Alert, Button, Progress } from 'antd';
+import { openDb, DB_NAME, OBJECT_STORE, OBJECT_KEY, OBJECT_KEY_VALUE } from '@fable/common/dist/db-utils';
+import { commitCapture } from '@fable/common/dist/capture-storage';
 import * as Tags from './styled';
 import FableLogo from '../../assets/fable-logo-2.svg';
 
-interface IDispatchProps {
-}
+interface Props { title: string }
+interface State { progressPercent: number; error: string | null }
 
-const mapDispatchToProps = () => ({});
-
-interface IAppStateProps {
-}
-
-const mapStateToProps = () => ({});
-
-interface IOwnProps {
-  title: string;
-}
-
-type IProps = IOwnProps &
-  IAppStateProps &
-  IDispatchProps &
-  WithRouterProps<{
-    tourId: string;
-    screenId: string;
-    annotationId?: string;
-  }>;
-
-type IOwnStateProps = {
-  loading: boolean;
-  progressPercent: number;
-}
-
-class PrepTour extends React.PureComponent<IProps, IOwnStateProps> {
-  private timer: ReturnType<typeof setInterval> | null = null;
-
-  constructor(props: IProps) {
+/** Watches the extension's small status messages; recording bytes never enter React state. */
+export class PrepTour extends React.PureComponent<Props, State> {
+  constructor(props: Props) {
     super(props);
-    this.state = { loading: true, progressPercent: 0 };
+    this.state = { progressPercent: 0, error: null };
   }
 
-  initWaitingLoop() {
-    this.timer = setInterval(() => {
-      const totalScreenCountEl = document.querySelector('#total-screen-count') as HTMLElement;
-      const numberOfScreensReceivedCountEl = document.querySelector('#number-of-screens-received-count') as HTMLElement;
+  private observer: MutationObserver | null = null;
 
-      if (totalScreenCountEl && numberOfScreensReceivedCountEl && this.state.progressPercent < 95) {
-        const totalScreenCount = (+totalScreenCountEl.textContent! || 0) + 1;
-        const numberOfScreensReceivedCount = +numberOfScreensReceivedCountEl.textContent! || 0;
-        const progressPercent = Math.min(Math.round((numberOfScreensReceivedCount / totalScreenCount) * 100), 95);
-        this.setState({ progressPercent });
-      }
+  private deadline: ReturnType<typeof setTimeout> | null = null;
 
-      const redirectReady = document.querySelector('#redirect-ready') as HTMLElement;
-      if (redirectReady) {
-        this.setState({ progressPercent: 100 });
-        window.location.replace('/create-interactive-demo');
-      }
-    }, 500);
-  }
+  private active = false;
 
-  componentDidMount() {
+  private importingLegacy = false;
+
+  private lastReceived = -1;
+
+  componentDidMount(): void {
+    this.active = true;
     document.title = this.props.title;
-    this.setState({ loading: true });
-
-    // TODO[compat]: Compatibility code, delete old Compatibility code after a month
-    // Before Compatibility: dataversion 2:
-    //    Extension inject content script in insolated scope which adds data to dom. If the serialized dom size is too
-    //    big then chrome chrashes for not low power devices. This happens since the data is stringified and kept in
-    //    dom. This route then load the data in indexeddb.
-    this.waitForScreensData();
-
-    // After Compatibility: dataversion 3:
-    //    Extension content script directly loads the daata to indexeddb.
-
-    this.initWaitingLoop();
+    this.observer = new MutationObserver(this.readStatus);
+    this.observer.observe(document.body, { childList: true, subtree: true, characterData: true });
+    this.resetDeadline();
+    this.readStatus();
   }
 
-  async waitForScreensData() {
-    const db = await openDb(DB_NAME, OBJECT_STORE, 1, OBJECT_KEY);
+  componentWillUnmount(): void {
+    this.active = false;
+    this.stopWatching();
+  }
 
-    const intervalId = setInterval(async () => {
-      const el = document.querySelector('#exchange-data') as HTMLElement;
-      const cookiesEl = document.querySelector('#cookies-data') as HTMLElement;
-      const totalScreenCountEl = document.querySelector('#total-screen-count') as HTMLElement;
-      const numberOfScreensReceivedCountEl = document.querySelector('#number-of-screens-received-count') as HTMLElement;
-      const styleDataEl = document.querySelector('#screen-style-data') as HTMLElement;
-      const versionEl = document.querySelector('#version-data') as HTMLElement;
+  private stopWatching(): void {
+    this.observer?.disconnect();
+    this.observer = null;
+    if (this.deadline) clearTimeout(this.deadline);
+    this.deadline = null;
+  }
 
-      if (totalScreenCountEl && numberOfScreensReceivedCountEl) {
-        const totalScreenCount = +totalScreenCountEl.textContent! || 1;
-        const numberOfScreensReceivedCount = +numberOfScreensReceivedCountEl.textContent! || 0;
-        const progressPercent = Math.round((numberOfScreensReceivedCount / totalScreenCount) * 100);
+  private resetDeadline(): void {
+    if (this.deadline) clearTimeout(this.deadline);
+    this.deadline = setTimeout(() => this.fail(
+      'The extension stopped responding. Keep this recording tab open, check that the Fable extension is enabled, and retry.'
+    ), 60000);
+  }
+
+  private fail = (error: string): void => {
+    if (!this.active) return;
+    this.stopWatching();
+    this.setState({ error });
+  };
+
+  private finish = (): void => {
+    if (!this.active) return;
+    this.active = false;
+    this.stopWatching();
+    window.location.replace('/create-interactive-demo');
+  };
+
+  private readStatus = (): void => {
+    if (!this.active || this.state.error) return;
+    const text = (id: string): string => document.getElementById(id)?.textContent || '';
+    const error = text('capture-transfer-error');
+    if (error) { this.fail(error); return; }
+    const total = Number(text('total-screen-count'));
+    const received = Number(text('number-of-screens-received-count'));
+    if (Number.isSafeInteger(total) && total > 0 && Number.isSafeInteger(received) && received >= 0) {
+      if (received > this.lastReceived) {
+        this.lastReceived = received;
+        this.resetDeadline();
+      }
+      const progressPercent = Math.min(95, Math.round((received / total) * 95));
+      if (progressPercent !== this.state.progressPercent) {
         this.setState({ progressPercent });
       }
-
-      if (el && cookiesEl) {
-        clearInterval(intervalId);
-        const screensData = el.textContent;
-        const cookies = cookiesEl.textContent || '';
-        const version = versionEl && versionEl.textContent ? versionEl.textContent : '1';
-        let screenStyleData = '';
-        if (styleDataEl && styleDataEl.textContent) {
-          screenStyleData = styleDataEl.textContent;
-        }
-
-        if (!screensData) {
-          return;
-        }
-
-        const data = {
-          id: OBJECT_KEY_VALUE,
-          screensData,
-          cookies,
-          screenStyleData,
-          version
-        };
-
-        if (db) {
-          const transaction = sentryStartTransaction('saveTourDataToIndexedDB');
-          await putDataInDb(db, OBJECT_STORE, data);
-          sentryTxReport(transaction, 'screenscount', JSON.parse(screensData).length, 'byte');
-          const dbData = await getDataFromDb(db, OBJECT_STORE, OBJECT_KEY_VALUE) as DBData;
-          if (!dbData) {
-            captureException('Data not stored in indexedDB');
-          }
-          db.close();
-          setTimeout(() => {
-            window.location.replace('/create-interactive-demo');
-          }, 500);
-        }
-      }
-    }, 300);
-  }
-
-  componentWillUnmount() {
-    this.timer && clearInterval(this.timer);
-  }
-
-  render() {
-    if (this.state.loading) {
-      return (
-        <Tags.HeartLoaderCon>
-          <img src={FableLogo} alt="fable loader" style={{ height: '50px', width: '50px', margin: 'auto' }} />
-          <Progress strokeColor="#7567ff" status="active" percent={this.state.progressPercent} />
-        </Tags.HeartLoaderCon>
-      );
     }
+    if (text('redirect-ready') === '1') { this.finish(); return; }
+    // Supported v2 extensions write the complete payload once. v3/v4 commit to IndexedDB themselves.
+    const screensData = text('exchange-data');
+    if (screensData && !this.importingLegacy) {
+      this.importingLegacy = true;
+      this.importLegacy(screensData, text('screen-style-data'), text('version-data')).catch(cause => {
+        this.fail(cause instanceof Error ? cause.message : 'The recording could not be stored. Retry the transfer.');
+      });
+    }
+  };
 
+  private async importLegacy(screensData: string, screenStyleData: string, version: string): Promise<void> {
+    const screens = JSON.parse(screensData);
+    if (!Array.isArray(screens) || !screens.length) throw new Error('The recording contains no screens.');
+    const db = await openDb(DB_NAME, OBJECT_STORE, 1, OBJECT_KEY);
+    try {
+      await commitCapture(db, { id: OBJECT_KEY_VALUE,
+        screensData,
+        screenStyleData,
+        cookies: '[]',
+        version: version || '1' });
+    } finally { db.close(); }
+    this.finish();
+  }
+
+  render(): React.ReactElement {
     return (
-      <div>
-        <h1>Done!</h1>
-      </div>
-
+      <Tags.HeartLoaderCon>
+        <img src={FableLogo} alt="Fable" style={{ height: '50px', width: '50px', margin: 'auto' }} />
+        {this.state.error ? (
+          <>
+            <Alert type="error" showIcon message="Recording transfer paused" description={this.state.error} />
+            <Button type="primary" onClick={() => window.location.reload()}>Retry transfer</Button>
+            <Button href="/create-interactive-demo">Open previously received recording</Button>
+          </>
+        ) : <Progress strokeColor="#7567ff" status="active" percent={this.state.progressPercent} />}
+      </Tags.HeartLoaderCon>
     );
   }
 }
 
-export default connect<IAppStateProps, IDispatchProps, IOwnProps, TState>(
-  mapStateToProps,
-  mapDispatchToProps
-)(withRouter(PrepTour));
+export default PrepTour;

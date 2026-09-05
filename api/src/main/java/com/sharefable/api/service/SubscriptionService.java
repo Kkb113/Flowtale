@@ -10,6 +10,7 @@ import com.chargebee.org.json.JSONObject;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sharefable.api.common.*;
 import com.sharefable.api.config.PaymentConfig;
+import com.sharefable.api.config.LocalDevelopmentConfig;
 import com.sharefable.api.entity.*;
 import com.sharefable.api.repo.EntityConfigKVRepo;
 import com.sharefable.api.repo.OrgRepo;
@@ -26,7 +27,6 @@ import io.sentry.Sentry;
 import jakarta.transaction.Transactional;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import lombok.val;
 import org.apache.commons.lang3.StringUtils;
 import org.javatuples.Pair;
 import org.springframework.http.HttpStatus;
@@ -51,6 +51,7 @@ public class SubscriptionService {
   private static final int CREDIT_SCALED_BY = 10;
   private final SubscriptionRepo repo;
   private final PaymentConfig paymentConfig;
+  private final LocalDevelopmentConfig localDevelopment;
   private final OrgService orgService;
   private final OrgRepo orgRepo;
   private final LogService logService;
@@ -104,7 +105,22 @@ public class SubscriptionService {
     if (user.getBelongsToOrg() == null) return null;
     Optional<Org> maybeOrg = orgRepo.findById(user.getBelongsToOrg());
     if (maybeOrg.isEmpty()) return null;
-    Org org = maybeOrg.get();
+    return newSubscription(info, user, maybeOrg.get());
+  }
+
+  private RespSubscription newSubscription(ReqSubscriptionInfo info, User user, Org org) {
+
+    if (localDevelopment.isEnabled()) {
+      Subscription existing = repo.getSubscriptionByOrgId(org.getId());
+      if (existing != null) return subscriptionResponse(org.getId());
+      Subscription local = repo.save(Subscription.builder()
+        .orgId(org.getId()).managedBy(SubscriptionManagedBy.LOCAL)
+        .paymentPlan(PaymentTerms.Plan.BUSINESS).paymentInterval(PaymentTerms.Interval.MONTHLY)
+        .paymentPlanId("business-3-USD-Monthly").cbCustomerId("").cbSubscriptionId("")
+        .status(com.chargebee.models.Subscription.Status.ACTIVE).build());
+      setCreditsForOrg(local, Math.max(1, orgService.getCountOfActiveUsersInOrg(org.getId())));
+      return subscriptionResponse(org.getId());
+    }
 
     String planId = paymentConfig.getPlanId(info.pricingPlan(), info.pricingInterval());
     List<EntityConfigKV> entityConfigKVS;
@@ -220,13 +236,29 @@ public class SubscriptionService {
 
   @Transactional
   public RespSubscription updateSubscription(ReqSubscriptionInfo info, Long orgId) {
-    return updateSubscription(info, orgService.getOrgOwner(orgId));
+    Org org = orgRepo.findById(orgId).orElseThrow(() ->
+      new ResponseStatusException(HttpStatus.NOT_FOUND, "Workspace not found"));
+    if (org.getCreatedBy() == null) throw new ResponseStatusException(HttpStatus.CONFLICT, "Workspace owner is missing");
+    return updateSubscription(info, org.getCreatedBy(), org);
   }
 
   @Transactional
   public RespSubscription updateSubscription(ReqSubscriptionInfo info, User user) {
-    val orgId = user.getBelongsToOrg();
+    Org org = orgRepo.findById(user.getBelongsToOrg()).orElseThrow(() ->
+      new ResponseStatusException(HttpStatus.NOT_FOUND, "Workspace not found"));
+    return updateSubscription(info, user, org);
+  }
+
+  private RespSubscription subscriptionResponse(Long orgId) {
+    Pair<Subscription, List<EntityConfigKV>> pair = getSubscriptionWithCreditInfo(orgId);
+    return pair.getValue0() == null ? null : RespSubscription.from(pair.getValue0(), pair.getValue1());
+  }
+
+  private RespSubscription updateSubscription(ReqSubscriptionInfo info, User user, Org org) {
+    requireExternalBilling();
+    Long orgId = org.getId();
     Subscription subs = repo.getSubscriptionByOrgId(orgId);
+    if (subs == null) throw new ResponseStatusException(HttpStatus.CONFLICT, "Workspace subscription is missing");
 
     // If subscription purchased, upgraded, downgraded update it
     // if it's deactivated start a new chargebee subscription
@@ -272,7 +304,7 @@ public class SubscriptionService {
           // If user is choosing saas -> lifetime
           // if upgrading / downgrading lifetime
           repo.delete(subs);
-          return newSubscription(info, user);
+          return newSubscription(info, user, org);
         } else {
           throw new RuntimeException("Unknown subscription manager " + subs.getManagedBy());
         }
@@ -287,7 +319,7 @@ public class SubscriptionService {
               PaymentTerms.Plan.SOLO,
               PaymentTerms.Interval.MONTHLY,
               null
-            ), user);
+            ), user, org);
         } else if (subs.getManagedBy() == SubscriptionManagedBy.CHARGEBEE) {
           // saas upgrade / downgrade
           PaymentTerms.Plan beforePlan = subs.getPaymentPlan();
@@ -343,13 +375,15 @@ public class SubscriptionService {
   @Async
   @Transactional
   public void updateNoOfSeatInSubscription(Long orgId) {
-    try {
-      Thread.sleep(10000);
-    } catch (InterruptedException e) {
-      log.warn("updateNoOfSeatInSubscription did not wait", e);
-    }
     final int newSeatQuantity = orgService.getCountOfActiveUsersInOrg(orgId);
     Subscription subs = repo.getSubscriptionByOrgId(orgId);
+    if (subs == null) return;
+    if (subs.getManagedBy() == SubscriptionManagedBy.LOCAL) {
+      if (!localDevelopment.isEnabled()) throw new IllegalStateException("Local subscription outside development");
+      setCreditsForOrg(subs, newSeatQuantity);
+      return;
+    }
+    if (subs.getManagedBy() != SubscriptionManagedBy.CHARGEBEE) return;
     String subsId = subs.getCbSubscriptionId();
     if (StringUtils.isBlank(subsId)) {
       log.error("Seat change requested but subscription id not found for org {}", orgId);
@@ -385,6 +419,7 @@ public class SubscriptionService {
   }
 
   public String createHostedPage(User user, Optional<ReqSubscriptionInfo> info) {
+    requireExternalBilling();
     Subscription subs = repo.getSubscriptionByOrgId(user.getBelongsToOrg());
     if (subs == null) return null;
 
@@ -407,6 +442,7 @@ public class SubscriptionService {
 
   @Transactional
   public String createHostedPageForAiCredit(User user) {
+    requireExternalBilling();
     Subscription subs = repo.getSubscriptionByOrgId(user.getBelongsToOrg());
     Org org = orgRepo.findById(subs.getOrgId()).orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND));
     String custId = subs.getCbCustomerId();
@@ -480,6 +516,7 @@ public class SubscriptionService {
   }
 
   public RespSubsValidation validate(Long orgId) {
+    requireExternalBilling();
     RespSubsValidation validationResult = new RespSubsValidation();
     try {
       Subscription subs = repo.getSubscriptionByOrgId(orgId);
@@ -671,6 +708,16 @@ public class SubscriptionService {
     // For legacy plans, let's by default set 100 credits.
     if (creditValue == null) creditValue = new PaymentConfig.CreditValue(100, false);
     return creditValue;
+  }
+
+  private void requireExternalBilling() {
+    if (localDevelopment.isEnabled()) {
+      throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,
+        "Billing is disabled in local development. The local workspace includes fixture entitlements.");
+    }
+    if (StringUtils.isBlank(paymentConfig.getCbApiKey()) || StringUtils.isBlank(paymentConfig.getCbSiteName())) {
+      throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "Billing is not configured");
+    }
   }
 
   @Transactional

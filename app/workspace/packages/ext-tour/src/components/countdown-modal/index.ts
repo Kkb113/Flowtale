@@ -65,9 +65,11 @@ export class CountDownModal {
     this.cdNumEl!.textContent = count.toString();
   }
 
-  cleanup() {
+  cleanup(notify = true) {
+    if (!this.hostConEl) return;
     clearInterval(this.cdInterval);
     this.hostConEl?.remove();
-    this.onCountDownComplete();
+    this.hostConEl = null;
+    if (notify) this.onCountDownComplete();
   }
 }

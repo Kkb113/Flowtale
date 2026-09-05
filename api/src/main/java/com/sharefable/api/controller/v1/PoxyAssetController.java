@@ -1,6 +1,8 @@
 package com.sharefable.api.controller.v1;
 
 import com.sharefable.Routes;
+import com.sharefable.api.auth.AuthUser;
+import com.sharefable.api.entity.User;
 import com.sharefable.api.common.ApiResp;
 import com.sharefable.api.service.ProxyAssetService;
 import com.sharefable.api.transport.ParsedReqProxyAsset;
@@ -30,14 +32,14 @@ public class PoxyAssetController {
 
 
   @RequestMapping(value = Routes.PROXY_ASSET, method = RequestMethod.POST, produces = MediaType.APPLICATION_JSON_VALUE)
-  public ApiResp<RespProxyAsset> proxyAsset(@RequestBody ReqProxyAsset body) {
+  public ApiResp<RespProxyAsset> proxyAsset(@RequestBody ReqProxyAsset body, @AuthUser User user) {
     Optional<ParsedReqProxyAsset> parsedBody = ParsedReqProxyAsset.from(body);
     if (parsedBody.isEmpty()) {
       return ApiResp.<RespProxyAsset>builder().status(ApiResp.ResponseStatus.Failure).errCode(ApiResp.ErrorCode.IllegalArgs)
         .errStr("Could not create proxy asset").build();
     }
 
-    RespProxyAsset proxyAsset = proxyAssetService.createProxyAsset(parsedBody.get(), 0, new HashMap<>());
+    RespProxyAsset proxyAsset = proxyAssetService.createProxyAsset(parsedBody.get(), user.getBelongsToOrg());
     return ApiResp.<RespProxyAsset>builder().status(ApiResp.ResponseStatus.Success).data(proxyAsset).build();
   }
 }

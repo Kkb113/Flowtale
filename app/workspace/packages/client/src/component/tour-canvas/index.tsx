@@ -329,6 +329,7 @@ export default function TourCanvas(props: CanvasProps): JSX.Element {
   const [nodeMenuModalData, setNodeMenuModalData] = useState(initialAnnNodeModalData);
   const [addScreenModalData, setAddScreenModalData] = useState(initialAddScreenModal);
   const [showLoaderEditor, setShowLoaderEditor] = useState(false);
+  const emptyScreenPickerShown = useRef(false);
   const zoomBehaviorRef = useRef<ZoomBehavior<SVGSVGElement, unknown>>();
   const [annEditorModal, setAnnEditorModal] = useState<AnnEditorModal | null>(null);
   const annEditorModalRef = useRef<AnnEditorModal | null>(null);
@@ -1343,8 +1344,10 @@ export default function TourCanvas(props: CanvasProps): JSX.Element {
       props.tourOpts
     );
 
-    if (nodesWithDims.length === 0 && !props.shouldShowOnlyScreen) {
-      props.shouldShowScreenPicker({ ...newScreenPickerData, showCloseButton: false });
+    if (nodesWithDims.length > 0) emptyScreenPickerShown.current = false;
+    if (nodesWithDims.length === 0 && !props.shouldShowOnlyScreen && !emptyScreenPickerShown.current) {
+      emptyScreenPickerShown.current = true;
+      props.shouldShowScreenPicker({ ...newScreenPickerData, showCloseButton: true });
     }
 
     const nodeLookup = nodesWithDims.reduce((hm, n) => {

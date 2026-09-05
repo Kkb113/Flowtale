@@ -1,6 +1,6 @@
 import { RespOrg, RespUser } from '@fable/common/dist/api-contract';
-import raiseDeferredError from '@fable/common/dist/deferred-error';
 import React from 'react';
+import { Alert, Button } from 'antd';
 import { connect } from 'react-redux';
 import CompanyCarousel from '../../component/company-carousel';
 import ExtensionDownload from '../../component/user-onboarding/extension-download';
@@ -29,7 +29,7 @@ const mapDispatchToProps = (dispatch: any) => ({
   createNewOrg: (orgName: string) => dispatch(createOrg(orgName)),
   getAllUserOrgs: () => dispatch(getAllUserOrgs()),
   updateUser: (firstName: string, lastName: string) => dispatch(updateUser(firstName, lastName)),
-  assignOrgToUser: (orgId: number, isJoinViaInvite?: boolean) => dispatch(assignOrgToUser(orgId, isJoinViaInvite)),
+  assignOrgToUser: (orgId: number, isJoinViaInvite?: boolean, inviteCode?: string) => dispatch(assignOrgToUser(orgId, isJoinViaInvite, inviteCode)),
   updateUseCasesForOrg: (useCases: string[], othersText: string) => dispatch(updateUseCasesForOrg(useCases, othersText))
 });
 
@@ -50,6 +50,8 @@ type IProps = IOwnProps &
   }>;
 
 type IOwnStateProps = {
+  inviteError: string | null;
+  workspaceError: string | null;
   extInstalled: boolean | null;
   currentSlideIdx: number;
 }
@@ -60,24 +62,47 @@ const SLIDE_IDX_USECASE = 2;
 const SLIDE_IDX_EXT_INSTALL = 3;
 
 class NewOnboarding extends React.PureComponent<IProps, IOwnStateProps> {
+  private mounted = false;
+
   orgCreateInputRef: React.RefObject<HTMLInputElement> = React.createRef();
 
   constructor(props: IProps) {
     super(props);
     this.state = {
+      inviteError: null,
+      workspaceError: null,
       extInstalled: null,
       currentSlideIdx: -1,
     };
   }
 
-  async componentDidMount(): Promise<void> {
+  componentDidMount(): void {
+    this.mounted = true;
     isExtensionInstalled().then((isInstalled) => {
-      this.setState({ extInstalled: isInstalled });
+      if (this.mounted) this.setState({ extInstalled: isInstalled });
+    }).catch(() => {
+      if (this.mounted) this.setState({ extInstalled: false });
     });
 
-    this.props.getAllUserOrgs();
+    this.loadWorkspaces();
     this.goToSlideBasedOnUrlFragment();
   }
+
+  componentWillUnmount(): void {
+    this.mounted = false;
+  }
+
+  private loadWorkspaces = async (): Promise<void> => {
+    this.setState({ workspaceError: null });
+    try {
+      await this.props.getAllUserOrgs();
+    } catch (error) {
+      if (this.mounted) {
+        this.setState({ workspaceError: error instanceof Error
+          ? error.message : 'Your workspaces could not be loaded.' });
+      }
+    }
+  };
 
   goToSlideBasedOnUrlFragment = (): void => {
     switch (this.props.location.hash.slice(1) as OnboardingSteps) {
@@ -115,7 +140,7 @@ class NewOnboarding extends React.PureComponent<IProps, IOwnStateProps> {
   };
 
   componentDidUpdate(prevProps: Readonly<IProps>, prevState: Readonly<IOwnStateProps>, snapshot?: any): void {
-    this.goToSlideBasedOnUrlFragment();
+    if (prevProps.location.hash !== this.props.location.hash) this.goToSlideBasedOnUrlFragment();
 
     if (!this.props.principal.firstName && this.state.currentSlideIdx !== SLIDE_IDX_USER_DETAILS) {
       this.props.navigate(`/${USER_ONBOARDING_ROUTE}${this.getQueryParmsStrWithQuestionMark()}#${OnboardingSteps.USER_DETAILS}`);
@@ -129,16 +154,14 @@ class NewOnboarding extends React.PureComponent<IProps, IOwnStateProps> {
         // for onboarding route
         const inviteCode = this.props.searchParams.get('ic');
         if (inviteCode) {
-          try {
-            const { orgId, invitedEmail } = JSON.parse(atob(inviteCode));
-            if (invitedEmail === this.props.principal!.email) {
-              this.props.assignOrgToUser(orgId, true).then((org: RespOrg) => {
-                this.navOrgNext(org);
-              });
+          this.props.assignOrgToUser(0, true, inviteCode).then((org: RespOrg) => {
+            if (this.mounted) this.navOrgNext(org);
+          }).catch((error: unknown) => {
+            if (this.mounted) {
+              this.setState({ inviteError: error instanceof Error
+                ? error.message : 'The invitation could not be accepted. Please ask for a new invitation.' });
             }
-          } catch (e) {
-            raiseDeferredError(e as Error);
-          }
+          });
         }
       } else if (this.state.currentSlideIdx === SLIDE_IDX_USECASE) {
         if (this.props.org && this.props.org.info) {
@@ -163,6 +186,20 @@ class NewOnboarding extends React.PureComponent<IProps, IOwnStateProps> {
           </Tags.CompanyCarouselWrapper>
         )}
       >
+        {this.state.workspaceError && <Alert
+          style={{ zIndex: 10, alignSelf: 'flex-start' }}
+          type="error"
+          showIcon
+          message="Your workspaces could not be loaded"
+          description={this.state.workspaceError}
+          action={<Button onClick={this.loadWorkspaces}>Retry</Button>}
+        />}
+        {this.state.inviteError && <Alert
+          type="error"
+          showIcon
+          message="Invitation could not be accepted"
+          description={this.state.inviteError}
+        />}
         <reactanimated.Animated
           animationIn="fadeInRight"
           animationOut="fadeOutLeft"

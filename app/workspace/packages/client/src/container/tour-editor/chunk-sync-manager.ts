@@ -7,6 +7,7 @@ export enum SyncTarget {
 }
 
 interface CB {
+  acceptsKey?: (key: string) => boolean;
   onSyncNeeded: <T extends Record<string, any>>(
     key: string,
     value: T,
@@ -20,10 +21,20 @@ export interface SyncAcknowledgement {
   revision?: number;
 }
 
+export interface JournalSnapshot {
+  key: string;
+  targetKey: string;
+  serialized: string;
+  value?: Record<string, any>;
+  expectedRevision?: number;
+  kind: 'pending' | 'conflict' | 'staged' | 'invalid';
+}
+
 interface JournalEntry<T> {
   __fableJournalVersion: 1;
   value: T;
   expectedRevision?: number;
+  conflicted?: boolean;
 }
 
 function isJournalEntry<T>(value: T | JournalEntry<T>): value is JournalEntry<T> {
@@ -33,25 +44,36 @@ function isJournalEntry<T>(value: T | JournalEntry<T>): value is JournalEntry<T>
     && value.__fableJournalVersion === 1;
 }
 
-function readJournalEntry<T>(serialized: string): {value: T, expectedRevision?: number} {
+function readJournalEntry<T>(serialized: string): {value: T, expectedRevision?: number, conflicted?: boolean} {
   const parsed = JSON.parse(serialized) as T | JournalEntry<T>;
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('Invalid browser changes');
   if (isJournalEntry(parsed)) {
-    return { value: parsed.value, expectedRevision: parsed.expectedRevision };
+    if (!parsed.value || typeof parsed.value !== 'object' || Array.isArray(parsed.value)) throw new Error('Invalid browser changes');
+    if (parsed.expectedRevision !== undefined
+      && (!Number.isSafeInteger(parsed.expectedRevision) || parsed.expectedRevision < 0)) {
+      throw new Error('Invalid browser save revision');
+    }
+    if (parsed.conflicted !== undefined && typeof parsed.conflicted !== 'boolean') {
+      throw new Error('Invalid browser conflict state');
+    }
+    return { value: parsed.value, expectedRevision: parsed.expectedRevision, conflicted: parsed.conflicted };
   }
+  if ('__fableJournalVersion' in parsed) throw new Error('These browser changes require a newer application version');
   return { value: parsed };
 }
 
-function writeJournalEntry<T>(value: T, expectedRevision?: number): string {
-  if (expectedRevision === undefined) return JSON.stringify(value);
+function writeJournalEntry<T>(value: T, expectedRevision?: number, conflicted?: boolean): string {
+  if (expectedRevision === undefined && !conflicted) return JSON.stringify(value);
   const entry: JournalEntry<T> = {
     __fableJournalVersion: 1,
     value,
     expectedRevision,
+    ...(conflicted ? { conflicted: true } : {}),
   };
   return JSON.stringify(entry);
 }
 
-export type SyncStatusType = 'idle' | 'saving' | 'saved' | 'retrying' | 'conflict';
+export type SyncStatusType = 'idle' | 'saving' | 'saved' | 'retrying' | 'conflict' | 'recovery';
 
 export interface SyncStatus {
   type: SyncStatusType;
@@ -66,26 +88,27 @@ const enum TxState {
   Completed
 }
 
-type TxFn = (Function & { __fid__?: string});
+type TxFn = (tx: Tx, ...args: any[]) => void;
 export class Tx {
   private txState = TxState.Created;
 
   readonly uuid = getRandomId();
 
-  private ls: Array<[TxFn, any[]]> = [];
+  private ls: Array<{ fn: TxFn, args: any[], key: unknown }> = [];
 
   private data: unknown | null = null;
 
-  onFinish(f: TxFn, args: any[]): () => void {
-    if (!f.__fid__) {
-      f.__fid__ = getRandomId();
-    }
-    const ii = this.ls.findIndex(lfn => lfn[0].__fid__ === f.__fid__);
-    if (ii === -1) {
-      const i = this.ls.push([f, args]);
-      return () => this.ls.splice(i - 1, 1);
-    }
-    return () => this.ls.splice(ii, 1);
+  onFinish(fn: TxFn, args: any[], key: unknown = fn): () => void {
+    if (this.txState === TxState.Completed) throw new Error('Transaction is already complete');
+    const existing = this.ls.find(listener => listener.key === key);
+    const listener = existing || { fn, args, key };
+    listener.fn = fn;
+    listener.args = args;
+    if (!existing) this.ls.push(listener);
+    return () => {
+      const index = this.ls.indexOf(listener);
+      if (index !== -1) this.ls.splice(index, 1);
+    };
   }
 
   start(): Tx {
@@ -107,9 +130,13 @@ export class Tx {
   }
 
   end(): Tx {
+    // Failed promotion remains retryable; already completed callbacks are never replayed.
+    while (this.ls.length) {
+      const listener = this.ls[0];
+      listener.fn(this, ...listener.args);
+      this.ls.shift();
+    }
     this.txState = TxState.Completed;
-    this.ls.forEach(f => f[0](this, ...f[1]));
-    this.ls.length = 0;
     return this;
   }
 }
@@ -127,7 +154,9 @@ export default class ChunkSyncManager {
 
   private readonly cb: CB;
 
-  private isPolling = false;
+  private activePoll: Promise<void> | null = null;
+
+  private paused = false;
 
   private readonly retries: Record<string, {attempt: number, nextAttemptAt: number}> = {};
 
@@ -149,19 +178,18 @@ export default class ChunkSyncManager {
   ): K | null {
     const origKey = key;
     if (tx) {
-      key = `tx/${key}`;
+      key = `tx/${tx.uuid}/${key}`;
     } else if (!(key in this.lookupKeys)) {
       this.lookupKeys[key] = 1;
     }
-    delete this.conflicts[origKey];
-    delete this.retries[origKey];
+    // Typing is not conflict resolution, and must not bypass retry backoff.
 
     const storedVal = localStorage.getItem(key);
     const storedEntry = storedVal === null ? null : readJournalEntry<K>(storedVal);
     const newVal = updateFn(storedEntry?.value ?? null, value);
-    localStorage.setItem(key, writeJournalEntry(newVal, storedEntry?.expectedRevision ?? expectedRevision));
+    localStorage.setItem(key, writeJournalEntry(newVal, storedEntry?.expectedRevision ?? expectedRevision, storedEntry?.conflicted));
     if (tx) {
-      tx.onFinish(this.onTxFinish, [key, origKey, updateFn]);
+      tx.onFinish(this.onTxFinish, [key, origKey, updateFn], key);
       return null;
     }
     return newVal;
@@ -170,7 +198,6 @@ export default class ChunkSyncManager {
   // eslint-disable-next-line class-methods-use-this
   onTxFinish = <K>(tx: Tx, stagingKey: string, origKey: string, mergeFn: (storedVal: K | null, v: K) => K): void => {
     const storedStagingVal = readJournalEntry<K>(localStorage.getItem(stagingKey)!);
-    localStorage.removeItem(stagingKey);
 
     if (!(origKey in this.lookupKeys)) this.lookupKeys[origKey] = 1;
 
@@ -180,8 +207,14 @@ export default class ChunkSyncManager {
 
     localStorage.setItem(
       origKey,
-      writeJournalEntry(mergedVal, storedEntry?.expectedRevision ?? storedStagingVal.expectedRevision)
+      writeJournalEntry(
+        mergedVal,
+        storedEntry?.expectedRevision ?? storedStagingVal.expectedRevision,
+        storedEntry?.conflicted || storedStagingVal.conflicted
+      )
     );
+    // Quota/storage failures must leave the recoverable staging entry intact.
+    localStorage.removeItem(stagingKey);
     tx.setData(mergedVal);
   };
 
@@ -197,7 +230,7 @@ export default class ChunkSyncManager {
     while (len--) {
       const key = localStorage.key(len);
       if (!key) break;
-      if (key.startsWith(this.lookupKeyLike)) {
+      if (key.startsWith(this.lookupKeyLike) && (this.cb.acceptsKey?.(key) ?? true)) {
         const val = localStorage.getItem(key);
         if (!val) {
           localStorage.removeItem(key);
@@ -206,12 +239,85 @@ export default class ChunkSyncManager {
           try {
             const entry = readJournalEntry<K>(val);
             onLocalEditsLeft(key, entry.value);
+            if (entry.conflicted) {
+              this.conflicts[key] = 1;
+              this.setStatus({ type: 'conflict', key });
+            }
           } catch (error) {
             this.setStatus({ type: 'retrying', key, attempt: 0, error: error as Error });
           }
         }
       }
     }
+    if (this.getPendingEntries().some(entry => entry.kind === 'staged' || entry.kind === 'invalid')) {
+      this.setStatus({ type: 'recovery' });
+    }
+  }
+
+  getPendingEntries(): JournalSnapshot[] {
+    const entries: JournalSnapshot[] = [];
+    for (let index = 0; index < localStorage.length; index += 1) {
+      const key = localStorage.key(index);
+      if (!key) continue;
+      // Both legacy tx/<key> and isolated tx/<transaction>/<key> staging are recoverable.
+      const prefixIndex = key.startsWith('tx/') ? key.indexOf(`${this.lookupKeyLike}/`, 3) : 0;
+      const targetKey = prefixIndex >= 0 ? key.slice(prefixIndex) : '';
+      if (!targetKey.startsWith(`${this.lookupKeyLike}/`) || !(this.cb.acceptsKey?.(targetKey) ?? true)) continue;
+      const serialized = localStorage.getItem(key);
+      if (serialized === null) continue;
+      try {
+        const entry = readJournalEntry<Record<string, any>>(serialized);
+        if (!entry.value || typeof entry.value !== 'object' || Array.isArray(entry.value)) throw new Error('Invalid journal');
+        entries.push({ key,
+          targetKey,
+          serialized,
+          value: entry.value,
+          expectedRevision: entry.expectedRevision,
+          kind: key !== targetKey ? 'staged' : entry.conflicted ? 'conflict' : 'pending' });
+      } catch {
+        entries.push({ key, targetKey, serialized, kind: 'invalid' });
+      }
+    }
+    return entries;
+  }
+
+  replayPending<K>(accepts: (key: string) => boolean, onLocalEditsLeft: (key: string, value: K) => void): void {
+    for (const entry of this.getPendingEntries()) {
+      if (entry.key === entry.targetKey && entry.value && accepts(entry.key)) {
+        onLocalEditsLeft(entry.key, entry.value as K);
+      }
+    }
+  }
+
+  async pause(): Promise<void> {
+    this.paused = true;
+    await this.activePoll;
+  }
+
+  resume(): void { this.paused = false; }
+
+  private assertUnchanged(snapshot: JournalSnapshot): void {
+    if (!(this.cb.acceptsKey?.(snapshot.targetKey) ?? true)
+      || localStorage.getItem(snapshot.key) !== snapshot.serialized) {
+      throw new Error('These browser changes have changed. Review them again before continuing.');
+    }
+  }
+
+  discardReviewed(snapshot: JournalSnapshot): void {
+    if (!this.paused) throw new Error('Pause saving before resolving browser changes');
+    this.assertUnchanged(snapshot);
+    localStorage.removeItem(snapshot.key);
+    delete this.lookupKeys[snapshot.key];
+    delete this.conflicts[snapshot.key];
+    delete this.retries[snapshot.key];
+  }
+
+  async saveReviewed(snapshot: JournalSnapshot, save: () => Promise<void>): Promise<void> {
+    if (!this.paused) throw new Error('Pause saving before resolving browser changes');
+    this.assertUnchanged(snapshot);
+    await save();
+    // A later browser edit must survive an older acknowledgement, including another tab's write.
+    if (localStorage.getItem(snapshot.key) === snapshot.serialized) this.discardReviewed(snapshot);
   }
 
   private setStatus(status: SyncStatus): void {
@@ -220,37 +326,55 @@ export default class ChunkSyncManager {
 
   rebaseExpectedRevisions(predicate: (key: string) => boolean, revision: number): void {
     Object.keys(this.lookupKeys).filter(predicate).forEach(key => {
+      if (this.conflicts[key]) return;
       const serialized = localStorage.getItem(key);
       if (!serialized) return;
       const entry = readJournalEntry<Record<string, any>>(serialized);
+      if (entry.conflicted) return;
       localStorage.setItem(key, writeJournalEntry(entry.value, revision));
     });
   }
 
-  poll = async (): Promise<void> => {
-    if (this.isPolling) return;
-    this.isPolling = true;
+  poll = (): Promise<void> => {
+    if (!this.activePoll) {
+      this.activePoll = this.flush().finally(() => { this.activePoll = null; });
+    }
+    return this.activePoll;
+  };
+
+  private async flush(): Promise<void> {
     for (const key of Object.keys(this.lookupKeys)) {
+      if (this.paused) break;
+      if (!(this.cb.acceptsKey?.(key) ?? true)) continue;
       if (this.conflicts[key]) continue;
       const retry = this.retries[key];
       if (retry && retry.nextAttemptAt > Date.now()) continue;
-      const val = localStorage.getItem(key);
-      if (!val) {
-        delete this.lookupKeys[key];
-        delete this.retries[key];
-        continue;
-      }
-
       try {
+        const val = localStorage.getItem(key);
+        if (!val) {
+          delete this.lookupKeys[key];
+          delete this.retries[key];
+          continue;
+        }
         const entry = readJournalEntry<Record<string, any>>(val);
+        if (entry.conflicted) {
+          this.conflicts[key] = 1;
+          this.setStatus({ type: 'conflict', key });
+          continue;
+        }
         this.setStatus({ type: 'saving', key, attempt: (retry?.attempt || 0) + 1 });
         const acknowledgement = await this.cb.onSyncNeeded(key, entry.value, entry.expectedRevision);
         if (localStorage.getItem(key) === val) {
           localStorage.removeItem(key);
           delete this.lookupKeys[key];
         } else if (acknowledgement?.revision !== undefined) {
-          const pendingEntry = readJournalEntry<Record<string, any>>(localStorage.getItem(key)!);
-          localStorage.setItem(key, writeJournalEntry(pendingEntry.value, acknowledgement.revision));
+          const pending = localStorage.getItem(key);
+          if (pending) {
+            const pendingEntry = readJournalEntry<Record<string, any>>(pending);
+            if (!pendingEntry.conflicted) {
+              localStorage.setItem(key, writeJournalEntry(pendingEntry.value, acknowledgement.revision));
+            }
+          }
         }
         if (acknowledgement) this.cb.onAcknowledged?.(key, acknowledgement);
         delete this.retries[key];
@@ -259,6 +383,15 @@ export default class ChunkSyncManager {
         const typedError = error instanceof Error ? error : new Error(String(error));
         if (isApiConflict(error)) {
           this.conflicts[key] = 1;
+          try {
+            const pending = localStorage.getItem(key);
+            if (pending) {
+              const entry = readJournalEntry<Record<string, any>>(pending);
+              localStorage.setItem(key, writeJournalEntry(entry.value, entry.expectedRevision, true));
+            }
+          } catch (storageError) {
+            this.setStatus({ type: 'retrying', key, error: storageError as Error });
+          }
           this.setStatus({ type: 'conflict', key, error: typedError });
         } else {
           const attempt = (retry?.attempt || 0) + 1;
@@ -271,13 +404,13 @@ export default class ChunkSyncManager {
         break;
       }
     }
-    this.isPolling = false;
     if (Object.keys(this.lookupKeys).length === 0) this.setStatus({ type: 'idle' });
-  };
+  }
 
   end(): Promise<void> {
     clearInterval(this.timer);
     this.timer = 0;
+    this.isStarted = false;
     return this.poll();
   }
 }

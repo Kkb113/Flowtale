@@ -4,7 +4,7 @@ import lombok.extern.slf4j.Slf4j;
 
 @Slf4j
 public class OrgContext {
-  private static final ThreadLocal<Long> currentOrgId = new InheritableThreadLocal<>();
+  private static final ThreadLocal<Long> currentOrgId = new ThreadLocal<>();
 
   public static Long getCurrentOrgId() {
     return currentOrgId.get();

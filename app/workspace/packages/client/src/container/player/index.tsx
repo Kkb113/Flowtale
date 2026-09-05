@@ -977,7 +977,7 @@ export class Player extends React.PureComponent<IProps, IOwnStateProps> {
     window.removeEventListener('beforeunload', removeSessionId);
     window.removeEventListener('message', this.receiveMessage, false);
     document.removeEventListener(InternalEvents.OnNavigation, this.handleCurrentAnn);
-    document.addEventListener(InternalEvents.OnSelectedElChange, this.onAnnPositionChange);
+    document.removeEventListener(InternalEvents.OnSelectedElChange, this.onAnnPositionChange);
   }
 
   handleCurrentAnn = (e: OnNavigationEvent): void => {

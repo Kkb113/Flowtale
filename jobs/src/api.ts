@@ -6,8 +6,16 @@ import {
   RespFatTenantIntegration,
   RespDemoEntity,
   ReqLockUnlockDemo,
+  ResponseStatus,
 } from './api-contract';
 import * as log from './log';
+
+export class ApiServiceError extends Error {
+  constructor(readonly status: number) {
+    super(`API request failed (HTTP ${status})`);
+    this.name = 'ApiServiceError';
+  }
+}
 
 export async function getTourAssetPath (tourId: number): Promise<string> {
   const data = await req<undefined, string>(`/trasstpath?id=${tourId}`, 'GET');
@@ -31,7 +39,7 @@ export async function getTourById(id: string): Promise<RespDemoEntity> {
 }
 
 export async function getTourByRid(rid: string): Promise<RespDemoEntity> {
-  return await req<undefined, RespDemoEntity>(`/tour?rid=${rid}`);
+  return await req<undefined, RespDemoEntity>(`/tour/by/rid/${encodeURIComponent(rid)}`);
 }
 
 export async function republishDemo(rid: string): Promise<void> {
@@ -76,6 +84,7 @@ export async function req<T, K> (
     'Content-Type': 'application/json',
   };
   if (auth) headers['Authorization'] = auth;
+  else if (process.env.INTERNAL_SERVICE_TOKEN) headers['X-Fable-Service-Token'] = process.env.INTERNAL_SERVICE_TOKEN;
 
   const url = `${process.env.API_SERVER_ENDPOINT}/v1${urlPath}`;
   let resp;
@@ -84,15 +93,18 @@ export async function req<T, K> (
       method,
       headers,
       body: payload ? JSON.stringify(payload) : undefined,
+      signal: AbortSignal.timeout(30000),
     });
 
     if (!(resp.status >= 200 && resp.status < 300)) {
-      throw new Error(`Response status exception. Status: ${resp.status}`);
+      throw new ApiServiceError(resp.status);
     }
   } catch (e) {
-    log.err((e as Error).stack);
-    throw new Error( `Error while making request to ${url}. Error: ${(e as Error).message}`);
+    if (e instanceof ApiServiceError) throw e;
+    log.err('API request failed before acknowledgement');
+    throw new ApiServiceError(503);
   }
   const data = (await resp.json()) as ApiResp<K>;
+  if (!data || data.status === ResponseStatus.Failure) throw new ApiServiceError(502);
   return data.data as K;
 }

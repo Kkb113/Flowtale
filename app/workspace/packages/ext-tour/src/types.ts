@@ -17,6 +17,8 @@ export const enum RecordingStatus {
 export interface IExtStoredState {
   identity: IUser | null;
   recordingStatus: RecordingStatus;
+  recovery?: { total: number; complete: number; message: string };
+  pending?: { id: string; screenCount: number; createdAt: number }[];
 }
 
 export interface ReqScreenshotData {

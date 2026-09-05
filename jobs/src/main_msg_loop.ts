@@ -1,232 +1,92 @@
-import {DeleteMessageCommandOutput, MessageAttributeValue, SQS} from '@aws-sdk/client-sqs';
-import {TMsgAttrs} from './types';
+import { Message, SQS } from '@aws-sdk/client-sqs';
+import { createHash } from 'node:crypto';
+import { PoolConnection } from 'mysql2/promise';
+import { TMsgAttrs } from './types';
 import transcodeVideo from './processors/media/video_transcoder';
 import transcodeAudio from './processors/media/audio_transcoder';
-// import resizeImg from './processors/image_resizer';
 import * as log from './log';
-import {getApiConnection} from './db';
-import {AnalyticsJobType, JobProcessingStatus} from './api-contract';
+import { getApiConnection } from './db';
+import { JobProcessingStatus } from './api-contract';
 import NonRunnableErr from './irrecoverable_err';
-import {CONCURRENCY} from './consts';
-import { processEventsForDestination } from './processors/mics';
-import { sendEventToCobalt } from './processors/cobalt';
-import RetryableErr from './retryable-err';
-import * as Sentry from '@sentry/node';
-import { MysqlError } from 'mysql';
-import { routeAnalyticsJob } from './analytics/event_router';
-import { upgradeDowngradeSideEffect } from './processors/upgrade-downgrade-sideffect';
+import { CONCURRENCY } from './consts';
+import { startQueueWorker } from './queue-worker';
 
-export const sqsClient = new SQS({ region: process.env.SQS_Q_REGION });
-export const qUrlResp = sqsClient.getQueueUrl({ QueueName: process.env.SQS_Q_NAME });
-
-let url: string | undefined;
-
-function deleteMsgPrep(qUrl: string, id: string | undefined): () => Promise<DeleteMessageCommandOutput> {
-  return () => {
-    return sqsClient.deleteMessage({
-      QueueUrl: url,
-      ReceiptHandle: id,
-    });
-  };
+async function query<T>(connection: PoolConnection, sql: string, values: unknown[]): Promise<T> {
+  const [rows] = await connection.query(sql, values);
+  return rows as T;
 }
 
-const INTERNAL_MESSAGE_PREFIX = '__fable_internal__';
-
-function getMsgAttrMaps(attrs?: Record<string, MessageAttributeValue>): TMsgAttrs {
-  attrs = attrs || {};
-  const flatAttrs: Record<string, string | undefined | null> = {};
-  for (const [key, val] of Object.entries(attrs)) {
-    if (key.startsWith(INTERNAL_MESSAGE_PREFIX)) continue;
-    flatAttrs[key] = val.StringValue;
+export async function processJob(message: Message, signal: AbortSignal): Promise<void> {
+  const attributes: TMsgAttrs = {};
+  for (const [key, value] of Object.entries(message.MessageAttributes || {})) attributes[key] = value.StringValue;
+  if (message.Body === 'NF' || message.Body === 'CBE') {
+    if (process.env.APP_ENV === 'local' && process.env.INTEGRATIONS_ENABLED !== 'true') {
+      log.info('Optional integration event skipped in local mode');
+      return;
+    }
+    if (message.Body === 'NF') {
+      const { processEventsForDestination } = await import('./processors/mics');
+      await processEventsForDestination(attributes);
+    } else {
+      const { sendEventToCobalt } = await import('./processors/cobalt');
+      await sendEventToCobalt(attributes);
+    }
+    return;
   }
-  return flatAttrs;
-}
-
-function throwDeferredErr(e: Error) {
-  const timer = setTimeout(() => {
-    clearTimeout(timer);
-    throw e;
-  }, 0);
+  if (message.Body === 'SUBS_UPGRADE_DOWNGRADE_SIDE_EFFECT') {
+    const { upgradeDowngradeSideEffect } = await import('./processors/upgrade-downgrade-sideffect');
+    await upgradeDowngradeSideEffect(attributes);
+    return;
+  }
+  if (!attributes.key) {
+    const body = JSON.parse(message.Body || '{}');
+    if (body.type !== 'TRIGGER_ANALYTICS_JOB') throw new NonRunnableErr('Unknown queue message type');
+    const { routeAnalyticsJob } = await import('./analytics/event_router');
+    await routeAnalyticsJob(body);
+    return;
+  }
+  if (!['TRANSCODE_VIDEO', 'TRANSCODE_AUDIO'].includes(message.Body || '')) {
+    throw new NonRunnableErr('Unsupported media job');
+  }
+  const type = message.Body!;
+  const connection = await getApiConnection();
+  const lock = `media:${createHash('sha256').update(`${type}:${attributes.key}`).digest('hex').slice(0, 56)}`;
+  let acquired = false;
+  try {
+    const claim = await query<{acquired: number}[]>(connection, 'SELECT GET_LOCK(?, 0) AS acquired', [lock]);
+    acquired = claim[0]?.acquired === 1;
+    if (!acquired) throw new Error('Media job is already being processed');
+    const rows = await query<{processing_status: JobProcessingStatus; info: TMsgAttrs | string}[]>(connection,
+      'SELECT processing_status, info FROM jobs WHERE job_type = ? AND job_key = ?', [type, attributes.key]);
+    if (!rows.length) throw new Error('Media job has not committed yet');
+    if (rows[0].processing_status === JobProcessingStatus.Processed) return;
+    const saved = typeof rows[0].info === 'string' ? JSON.parse(rows[0].info) : rows[0].info;
+    if (!saved || saved.key !== attributes.key || saved.type !== type) throw new NonRunnableErr('Invalid media job record');
+    // The queue identifies work. Only the committed database row supplies source and output locations.
+    await query(connection, 'UPDATE jobs SET processing_status = ?, failure_reason = NULL WHERE job_type = ? AND job_key = ?',
+      [JobProcessingStatus.InProcess, type, attributes.key]);
+    try {
+      let info;
+      if (type === 'TRANSCODE_VIDEO') info = await transcodeVideo(saved, signal);
+      else if (type === 'TRANSCODE_AUDIO') info = await transcodeAudio(saved, signal);
+      else throw new NonRunnableErr('Unsupported media job');
+      if (signal.aborted) throw new Error('Media job lease lost');
+      await query(connection, 'UPDATE jobs SET processing_status = ?, info = ? WHERE job_type = ? AND job_key = ?',
+        [JobProcessingStatus.Processed, JSON.stringify(info), type, attributes.key]);
+    } catch (error) {
+      await query(connection, 'UPDATE jobs SET processing_status = ?, failure_reason = ? WHERE job_type = ? AND job_key = ?',
+        [JobProcessingStatus.Failed, 'Media processing failed; retry or inspect the dead-letter queue', type, attributes.key]);
+      throw error;
+    }
+  } finally {
+    try { if (acquired) await query(connection, 'SELECT RELEASE_LOCK(?)', [lock]); }
+    finally { connection.release(); }
+  }
 }
 
 export default function mainMsgLoop() {
-  let timer = setTimeout(async () => {
-    if (!url) {
-      url = (await qUrlResp).QueueUrl;
-      if (!url) throw new Error('Queue url could not be retrieved');
-    }
-
-    log.info('Checking for new messages');
-    const msgs = await sqsClient.receiveMessage({
-      QueueUrl: url,
-      MaxNumberOfMessages: CONCURRENCY,
-      WaitTimeSeconds: 20,
-      MessageAttributeNames: ['*'],
-    });
-
-    if (msgs.Messages && msgs.Messages.length) {
-      log.info(`Got ${msgs.Messages.length} msgs`);
-      await Promise.all(msgs.Messages.map(async (msg) => {
-        log.info(`Processing message ${msg.Body}`);
-        const msgAttrs = getMsgAttrMaps(msg.MessageAttributes);
-        const deleteMsg = deleteMsgPrep(url!, msg.ReceiptHandle);
-
-        /*
-         * This following routing is little bit trickey and contains hangover from old system.
-         * 
-         * Initially the sqs message body was sent as a simple string and message attr contained the 
-         * json object. Which obviously is counter intuitive.
-         * 
-         * Now the message body is always a json object and message attr to pass meta information.
-         * 
-         * The following function supports both the old and new message formats. The `if` blocks are
-         * responsible for old format where the message body is string. 
-         * 
-         * The `else if` block is responsible for new format where the message body is always a json
-         * object.
-         */
-
-        if (msg.Body === 'NF') {
-          try {
-            await processEventsForDestination(msgAttrs);
-          } catch (e) {
-            if (e instanceof RetryableErr) {
-              if (!(e as RetryableErr).isRetryable) return;
-              let retryCount = 0;
-              if (`${INTERNAL_MESSAGE_PREFIX}retryCount` in (msg.MessageAttributes || {})) {
-                retryCount = +(msg.MessageAttributes![`${INTERNAL_MESSAGE_PREFIX}retryCount`]?.StringValue || '0');
-              }
-              if (retryCount >= 2) {
-                console.log('Retrying exhaused');
-                return;
-              }
-              console.log(`[${retryCount + 1}/3] Retrying...`);
-              sqsClient.sendMessage({
-                QueueUrl: url,
-                MessageBody: msg.Body,
-                DelaySeconds: 60 * 15,
-                MessageAttributes: {
-                  ...msg.MessageAttributes,
-                  [`${INTERNAL_MESSAGE_PREFIX}retryCount`]: {
-                    'DataType': 'String',
-                    'StringValue': String((retryCount + 1)),
-                  },
-                },
-              });
-            } else {
-              console.warn('Not retryable error');
-              console.error((e as Error).stack);
-            }
-          } finally {
-            await deleteMsg();
-          }
-        } else if (msg.Body === 'CBE') {
-          await sendEventToCobalt(msgAttrs);
-          await deleteMsg();
-        }  else if (msg.Body === 'SUBS_UPGRADE_DOWNGRADE_SIDE_EFFECT') {
-          await upgradeDowngradeSideEffect(msgAttrs);
-          await deleteMsg();
-        } else if (msgAttrs.key) { // legacy job processing
-          const conn = await getApiConnection();
-          let jobInfo: object = {};
-
-          // Marking in db that the process is starting
-          await new Promise((res, rej) => {
-            conn!.query(
-              'UPDATE jobs SET processing_status = ? WHERE job_key = ?',
-              [JobProcessingStatus.InProcess, msgAttrs.key],
-              (err: MysqlError | null) => {
-                if (err) rej(err);
-                else res(1);
-              });
-          });
-
-          try {
-            switch (msg.Body) {
-              case  'TRANSCODE_VIDEO': {
-                jobInfo = await transcodeVideo(msgAttrs);
-                break;
-              }
-
-              // WARN we stoped resizing for the timebeing due to compatibility issue of ffmpeg with node build version
-              //      right now resizing is not done for any kind of assets
-              // case 'RESIZE_IMG': {
-              //   jobInfo = await resizeImg(msgAttrs);
-              //   break;
-              // }
-
-              // case 'CREATE_DEMO_GIF': {
-              //   jobInfo = await createDemoGif(msgAttrs);
-              //   break;
-              // }
-
-              case  'TRANSCODE_AUDIO': {
-                jobInfo = await transcodeAudio(msgAttrs);
-                break;
-              }
-            
-              // case 'DELETE_ASSET': {
-              //   jobInfo = await deleteAsset(msgAttrs);
-              //   break;
-              // }
-
-              default: {
-                const errMsg =`No handler found for msg ${msg.Body}`;
-                log.err(errMsg);
-                throw new NonRunnableErr(errMsg);
-              }
-            }
-            await new Promise((res, rej) => {
-              conn!.query(
-                'UPDATE jobs SET processing_status = ?, info = ? WHERE job_key = ?',
-                [JobProcessingStatus.Processed, JSON.stringify(jobInfo), msgAttrs.key],
-                (err: MysqlError | null) => {
-                  if (err) rej(err);
-                  else res(1);
-                });
-            });
-            await deleteMsg();
-          } catch (e) {
-            Sentry.captureException(e);
-            await new Promise((res, rej) => {
-              conn!.query(
-                'UPDATE jobs SET processing_status = ?, failure_reason = ? WHERE job_key = ?',
-                [JobProcessingStatus.Failed, (e as Error).message, msgAttrs.key],
-                (err: MysqlError | null) => {
-                  if (err) rej(err);
-                  else res(1);
-                });
-            });
-            log.err((e as Error).message);
-            if (e instanceof NonRunnableErr) await deleteMsg();
-          } finally {
-            conn.release();
-          }
-        } else {
-          try {
-            const body = JSON.parse(msg.Body || '{}');
-
-            const tBody = body as {
-              type: 'TRIGGER_ANALYTICS_JOB';
-              data: {
-                job: AnalyticsJobType;
-              };
-            };
-            routeAnalyticsJob(tBody);
-          } catch (e) {
-            log.err((e as Error).stack);
-            log.err(`No handler found for message ${msg.Body}`);
-            Sentry.captureException(e);
-          } finally {
-            deleteMsg();
-          }
-        }
-      }));
-    }
-
-    clearTimeout(timer);
-    timer = mainMsgLoop();
-    // INFO for prod increase it to 5min
-  }, 15 * 1000 /* TODO implement something like exponential backoff to reduce msg polling to save cost */);
-  return timer;
+  const sqs = new SQS({ region: process.env.SQS_Q_REGION,
+    endpoint: process.env.AWS_ENDPOINT_URL_SQS || process.env.AWS_ENDPOINT_URL });
+  const worker = startQueueWorker(sqs, process.env.SQS_Q_NAME || '', CONCURRENCY, processJob, log.warn);
+  return { done: worker.done, stop: async () => { try { await worker.stop(); } finally { sqs.destroy(); } } };
 }

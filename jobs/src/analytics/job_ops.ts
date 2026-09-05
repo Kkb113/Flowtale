@@ -6,7 +6,7 @@ import {
   ReqUpdateAnalyticsJob,
 } from '../api-contract';
 import { req } from '../api';
-import { v4 as uuidv4 } from 'uuid';
+import { randomUUID as uuidv4 } from 'node:crypto';
 import { withRetry } from '../utils';
 
 function getISODate(d: Date): Date {

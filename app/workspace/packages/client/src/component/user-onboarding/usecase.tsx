@@ -1,7 +1,7 @@
 import { ArrowRightOutlined } from '@ant-design/icons';
-import { Button as AntdBtn, Tag, message } from 'antd';
+import { Alert, Button as AntdBtn, message } from 'antd';
 import { CheckboxValueType } from 'antd/es/checkbox/Group';
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { OurCheckbox } from '../../common-styled';
 import * as Tags from './styled';
 import Button from '../button';
@@ -76,6 +76,13 @@ export default function Usecase(props: Props): JSX.Element {
   const [others, setOthers] = useState('');
   const [selectedOptions, setSelectedOptions] = useState<string[]>([]);
   const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const pending = useRef(false);
+  const mounted = useRef(false);
+  useEffect(() => {
+    mounted.current = true;
+    return () => { mounted.current = false; };
+  }, []);
   const [messageApi, contextHolder] = message.useMessage();
 
   const handleChange = (checkedValue: CheckboxValueType[]): void => {
@@ -84,8 +91,10 @@ export default function Usecase(props: Props): JSX.Element {
 
   const handleSubmit = async (e: React.FormEvent<HTMLFormElement>): Promise<void> => {
     e.preventDefault();
+    if (pending.current) return;
+    const submittedOthers = showOthersOption ? others.trim() : '';
 
-    if (!selectedOptions.length && !others) {
+    if (!selectedOptions.length && !submittedOthers) {
       messageApi.open({
         type: 'error',
         content: 'At least one selection is mandatory',
@@ -94,10 +103,18 @@ export default function Usecase(props: Props): JSX.Element {
       return;
     }
 
+    pending.current = true;
+    setError(null);
     setIsLoading(true);
-    await props.updateUseCasesForOrg(selectedOptions, others);
-    setIsLoading(false);
-    props.onSubmit();
+    try {
+      await props.updateUseCasesForOrg(selectedOptions, submittedOthers);
+      if (mounted.current) props.onSubmit();
+    } catch (failure) {
+      if (mounted.current) setError(failure instanceof Error ? failure.message : 'Your choices could not be saved.');
+    } finally {
+      pending.current = false;
+      if (mounted.current) setIsLoading(false);
+    }
   };
 
   const handleSkip = (): void => {
@@ -107,6 +124,7 @@ export default function Usecase(props: Props): JSX.Element {
   return (
     <Tags.UsecaseCon>
       {contextHolder}
+      {error && <Alert type="error" showIcon message="Your choices could not be saved" description={error} />}
       <div
         className="typ-h1"
         style={{
@@ -130,7 +148,7 @@ export default function Usecase(props: Props): JSX.Element {
         <OurCheckbox
           checked={showOthersOption}
           onChange={e => setShowOthersOption(e.target.checked)}
-          style={{ transform: `translate(0px, ${showOthersOption ? 0 : -28}px` }}
+          style={{ transform: `translate(0px, ${showOthersOption ? 0 : -28}px)` }}
         >
           <CheckboxOption title="Others" description="" />
         </OurCheckbox>
@@ -164,6 +182,7 @@ export default function Usecase(props: Props): JSX.Element {
             }}
             type="link"
             onClick={handleSkip}
+            disabled={isLoading}
           >Skip
           </AntdBtn>
           <Button

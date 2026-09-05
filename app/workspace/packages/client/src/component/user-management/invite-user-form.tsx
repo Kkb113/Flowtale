@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { Alert } from 'antd';
 import api from '@fable/common/dist/api';
 import { ApiResp, ReqNewInvite, RespNewInvite, ResponseStatus } from '@fable/common/dist/api-contract';
 import Input from '../input';
@@ -12,29 +13,32 @@ export default function InviteUserForm(): JSX.Element {
   const [isLoading, setIsLoading] = useState(false);
   const [inviteCode, setInviteCode] = useState('');
   const [invitedEmail, setInvitedEmail] = useState('');
+  const [error, setError] = useState<string | null>(null);
 
   const handleSubmit = async (e: React.FormEvent<HTMLFormElement>): Promise<void> => {
     e.preventDefault();
     setIsLoading(true);
     setInviteCode('');
+    setError(null);
+    try {
+      const data = await api<ReqNewInvite, ApiResp<RespNewInvite>>('/new/invite', {
+        auth: true,
+        body: {
+          invitedEmail
+        },
+      });
 
-    const data = await api<ReqNewInvite, ApiResp<RespNewInvite>>('/new/invite', {
-      auth: true,
-      body: {
-        invitedEmail
-      },
-    });
-
-    if (data.status === ResponseStatus.Success) {
+      if (data.status !== ResponseStatus.Success || !data.data.code) throw new Error('Invitation could not be created');
       setInviteCode(data.data.code);
-    }
-
-    setIsLoading(false);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'Invitation could not be created. Try again.');
+    } finally { setIsLoading(false); }
   };
 
   return (
     <>
       <div className="modal-title">Invite a user</div>
+      {error && <Alert type="error" showIcon message={error} />}
       Please enter the email ID of the person that you want to invite to Fable.
       <form
         onSubmit={handleSubmit}
@@ -84,7 +88,7 @@ export default function InviteUserForm(): JSX.Element {
             You can share the link below with the same person.
             The user can join Fable by clicking on this link.
           </span>
-          <UrlCodeShare url={`${baseURL}/join/org?ic=${inviteCode}`} />
+          <UrlCodeShare url={`${baseURL}/join/org?ic=${encodeURIComponent(inviteCode)}`} />
         </div>
       )}
     </>

@@ -33,6 +33,7 @@ import { PostProcessDemoV1, ThemeForGuideV1, CreateNewDemoV1, RouterForTypeOfDem
 import { update_demo_content } from '@fable/common/dist/llm-fn-schema/update_demo_content';
 import { suggest_guide_theme } from '@fable/common/dist/llm-fn-schema/suggest_guide_theme';
 import { ColumnsType } from 'antd/es/table';
+import { richTextToPlainText } from './rich-text-sanitizer';
 import { IAnnotationConfigWithScreenId, updateAnnotationAudio, updateAnnotationBoxSize, updateAnnotationPositioning, updateOverlay } from './component/annotation/annotation-config-utils';
 import { getAnnotationBtn, getAnnotationByRefId } from './component/annotation/ops';
 import { FABLE_LEAD_FORM_FIELD_NAME, FABLE_PERS_VARS_FOR_TOUR } from './constants';
@@ -513,7 +514,7 @@ export const getCurrentFlowMain = (
     if (!annotation) break;
     const prevBtn = getAnnotationBtn(annotation, 'prev');
 
-    if (!prevBtn.hotspot) {
+    if (!prevBtn?.hotspot) {
       const main = `${annotation.screenId}/${refId}`;
       const flowIndex = flows.findIndex((flow) => flow.main === main);
       if (flowIndex !== -1) {
@@ -541,16 +542,18 @@ export function getTransparencyFromHexStr(hex: string): number {
 }
 
 const getOrderedAnnsFromGivenAnn = (
-  ann: IAnnotationConfigWithLocation,
+  ann: IAnnotationConfigWithLocation | undefined,
   flatAnns: Record<string, IAnnotationConfigWithLocation>
 ): IAnnotationConfigWithLocation[] => {
   const annsInOrder: IAnnotationConfigWithLocation[] = [];
+  const visited = new Set<string>();
 
-  while (true) {
+  while (ann && !visited.has(`${ann.screenId}/${ann.refId}`)) {
+    visited.add(`${ann.screenId}/${ann.refId}`);
     annsInOrder.push(ann);
 
-    const nextBtn = getAnnotationBtn(ann, 'next')!;
-    if (!nextBtn.hotspot || nextBtn.hotspot.actionType === 'open') {
+    const nextBtn = getAnnotationBtn(ann, 'next');
+    if (!nextBtn?.hotspot || nextBtn.hotspot.actionType === 'open') {
       break;
     }
     const nextAnnRefId = nextBtn.hotspot.actionValue._val.split('/')[1];
@@ -2180,18 +2183,9 @@ export const updateTourDataToAddVoiceOver = (
   return newTourData;
 };
 
-export const extractTextFromHTMLString = (richText: string | undefined): string => {
-  if (!richText) return '';
-  const textEl = document.createElement('div');
-  textEl.style.position = 'absolute';
-  textEl.style.left = '-200vw';
-  textEl.innerHTML = richText;
-  document.body.appendChild(textEl);
-  const annText = textEl.innerText || richText;
-  document.body.removeChild(textEl);
-  textEl.remove();
-  return annText;
-};
+export const extractTextFromHTMLString = (richText: string | undefined): string => (
+  richText ? richTextToPlainText(richText) : ''
+);
 
 type LLM_PAYLOAD = PostProcessDemoV1 | ThemeForGuideV1 | CreateNewDemoV1 | RouterForTypeOfDemoCreation | DemoMetadata | UpdateDemoContentV1 | RootRouterReq;
 

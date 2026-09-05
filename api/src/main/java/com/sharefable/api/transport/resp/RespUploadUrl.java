@@ -2,6 +2,7 @@ package com.sharefable.api.transport.resp;
 
 import com.fasterxml.jackson.annotation.JsonInclude;
 import com.sharefable.api.transport.GenerateTSDef;
+import com.sharefable.api.transport.OptionalPropInTS;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
@@ -18,4 +19,6 @@ public class RespUploadUrl {
   private String expiry;
   private String filename;
   private String cdnPath;
+  @OptionalPropInTS
+  private String objectKey;
 }

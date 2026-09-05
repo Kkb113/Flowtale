@@ -81,7 +81,9 @@ public class PaymentConfig {
 
   @PostConstruct
   public void configure() {
-    Environment.configure(cbSiteName, cbApiKey);
+    if (StringUtils.isNotBlank(cbSiteName) && StringUtils.isNotBlank(cbApiKey)) {
+      Environment.configure(cbSiteName, cbApiKey);
+    }
   }
 
   public String getPlanId(PaymentTerms.Plan plan, PaymentTerms.Interval interval) {

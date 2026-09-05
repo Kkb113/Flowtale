@@ -2,7 +2,6 @@ package com.sharefable.api.config;
 
 import com.sharefable.api.auth.AudienceValidator;
 import com.sharefable.Routes;
-import io.sentry.Sentry;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
@@ -19,6 +18,7 @@ import org.springframework.security.oauth2.server.resource.authentication.JwtAut
 import org.springframework.security.oauth2.server.resource.authentication.JwtGrantedAuthoritiesConverter;
 import org.springframework.security.oauth2.server.resource.web.BearerTokenResolver;
 import org.springframework.security.web.SecurityFilterChain;
+import org.springframework.security.oauth2.server.resource.web.authentication.BearerTokenAuthenticationFilter;
 
 
 @Slf4j
@@ -27,36 +27,34 @@ import org.springframework.security.web.SecurityFilterChain;
 @EnableMethodSecurity
 public class SecurityConfig {
 
-  @Value("${auth0.audiences}")
+  private final LocalDevelopmentConfig localDevelopment;
+
+  public SecurityConfig(LocalDevelopmentConfig localDevelopment) {
+    this.localDevelopment = localDevelopment;
+  }
+
+  @Value("${auth0.audiences:}")
   private String audience;
-  @Value("${spring.security.oauth2.resourceserver.jwt.issuer-uri}")
+  @Value("${spring.security.oauth2.resourceserver.jwt.issuer-uri:}")
   private String issuer;
+  @Value("${com.sharefable.api.internal-service-token:}")
+  private String internalServiceToken;
 
   @Bean
   JwtDecoder jwtDecoder() {
+    if (localDevelopment.isEnabled()) return new WorkspaceJwtDecoder(new LocalJwtDecoder(localDevelopment));
     NimbusJwtDecoder jwtDecoder = JwtDecoders.fromOidcIssuerLocation(issuer);
     OAuth2TokenValidator<Jwt> audienceValidator = new AudienceValidator(audience);
     OAuth2TokenValidator<Jwt> withIssuer = JwtValidators.createDefaultWithIssuer(issuer);
     OAuth2TokenValidator<Jwt> withAudience = new DelegatingOAuth2TokenValidator<>(withIssuer, audienceValidator);
     jwtDecoder.setJwtValidator(withAudience);
-    return token -> {
-      try {
-        String[] parts = token.split(":");
-        if (parts.length == 2) {
-          token = parts[1];
-          OrgContext.setCurrentOrgId(Long.valueOf(parts[0]));
-        }
-      } catch (Exception e) {
-        log.error("Something went wrong while splitting token", e);
-        Sentry.captureException(e);
-      }
-      return jwtDecoder.decode(token);
-    };
+    return new WorkspaceJwtDecoder(jwtDecoder);
   }
 
   @Bean
   public SecurityFilterChain filterChain(HttpSecurity http) throws Exception {
     http
+      .addFilterBefore(new ServiceBoundaryFilter(internalServiceToken), BearerTokenAuthenticationFilter.class)
       .csrf().disable().cors()
       .and()
       .sessionManagement()

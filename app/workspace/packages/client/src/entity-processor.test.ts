@@ -1,76 +1,51 @@
-import { groupScreens, P_RespScreen } from './entity-processor';
+import { groupScreens, processRawScreenData, P_RespScreen } from './entity-processor';
 
-// TODO fix + add the test cases for this
+jest.mock('./utils', () => ({ getDisplayableTime: () => 'today', getDefaultThumbnailHash: () => 'default.png' }));
+jest.mock('./component/annotation-rich-text-editor/utils/lead-form-node-utils', () => ({}));
+jest.mock('./component/screen-editor/utils/edits', () => ({}));
+jest.mock('nanoid', () => ({ nanoid: () => 'unused-in-grouping' }));
 
-describe('entity-processor', () => {
-  describe('#groupScreens', () => {
-    it('should group screens based on common ancestor', () => {
-      // const screens = [
-      //   {
-      //     id: 1,
-      //     parentScreenId: 2,
-      //     related: [] as P_RespScreen[],
-      //     updatedAt: new Date(2023, 0, 1),
-      //   },
-      //   {
-      //     id: 2,
-      //     parentScreenId: 5,
-      //     related: [] as P_RespScreen[],
-      //     updatedAt: new Date(2023, 0, 3),
-      //   },
-      //   {
-      //     id: 3,
-      //     parentScreenId: 4,
-      //     related: [] as P_RespScreen[],
-      //     updatedAt: new Date(2023, 0, 2),
-      //   },
-      //   {
-      //     id: 10,
-      //     parentScreenId: 4,
-      //     related: [] as P_RespScreen[],
-      //     updatedAt: new Date(2023, 0, 2),
-      //   },
-      //   {
-      //     id: 4,
-      //     parentScreenId: 5,
-      //     related: [] as P_RespScreen[],
-      //     updatedAt: new Date(2023, 0, 4),
-      //   },
-      //   {
-      //     id: 5,
-      //     parentScreenId: 0,
-      //     related: [] as P_RespScreen[],
-      //     updatedAt: new Date(2022, 11, 31),
-      //   },
-      //   {
-      //     id: 6,
-      //     parentScreenId: 0,
-      //     related: [] as P_RespScreen[],
-      //     updatedAt: new Date(2023, 1, 5),
-      //   },
-      //   {
-      //     id: 7,
-      //     parentScreenId: 8,
-      //     related: [] as P_RespScreen[],
-      //     updatedAt: new Date(2023, 1, 6),
-      //   },
-      //   {
-      //     id: 8,
-      //     parentScreenId: 0,
-      //     related: [] as P_RespScreen[],
-      //     updatedAt: new Date(2023, 1, 5),
-      //   },
-      // ] as P_RespScreen[];
+const screen = (id: number, parentScreenId: number, updatedAt = id): P_RespScreen => ({
+  id, parentScreenId, isRootScreen: parentScreenId === 0, related: [], updatedAt: new Date(updatedAt),
+} as unknown as P_RespScreen);
 
-      // const groupedScrn = groupScreens(screens);
-      // expect(groupedScrn.length).toBe(3);
-      // expect(groupedScrn[0].id).toBe(7);
-      // expect(groupedScrn[0].related.length).toBe(1);
-      // expect(groupedScrn[0].related[0].id).toBe(8);
-      // expect(groupedScrn[1].id).toBe(6);
-      // expect(groupedScrn[1].related.length).toBe(0);
-      // expect(groupedScrn[2].id).toBe(4);
-      // expect(groupedScrn[2].related.length).toBe(5);
-    });
-  });
+it('isolates published screen documents by demo and version while retaining portable export paths', () => {
+  const source = { ...screen(1, 0),
+    rid: 'screen-rid',
+    assetPrefixHash: 'screen-hash',
+    url: 'https://example.com',
+    thumbnail: 'thumb.jpg' };
+  const config = { pubTourAssetPath: 'https://assets.example/root/ptour/',
+    commonAssetPath: 'https://assets.example/root/',
+    dataFileName: 'index.json',
+    editFileName: 'edits.json' };
+  const publication = { assetPrefixHash: 'demo-hash', pubDataFileName: '2_index.json', pubEditFileName: '2_edits.json' };
+  const published = processRawScreenData(source as any, config as any, publication as any);
+  expect(published.dataFileUri.href).toBe('https://assets.example/root/ptour/assets-demo-hash/2/screens/screen-hash/index.json');
+  expect(published.editFileUri.pathname).toBe('/root/ptour/assets-demo-hash/2/screens/screen-hash/edits.json');
+  const redacted = processRawScreenData({ ...source, url: undefined, thumbnail: undefined } as any, config as any, publication as any);
+  expect(redacted.urlStructured.href).toBe('https://screen.invalid/');
+  expect(redacted.thumbnailUri.href).not.toContain('undefined');
+  const exported = processRawScreenData(source as any, config as any, publication as any, true, 'https://export.example');
+  expect(exported.dataFileUri.href).toBe('https://export.example/root/srn/screen-hash/index.json');
+  expect(exported.editFileUri.pathname).toBe('/root/srn/screen-hash/2_edits.json');
+});
+
+it('groups descendants under their available source without mutating input or duplicating entries on reload', () => {
+  const screens = [screen(1, 2), screen(2, 5), screen(3, 5), screen(5, 0), screen(6, 0)];
+  const grouped = groupScreens(screens);
+  expect(grouped.map(item => item.id)).toEqual([6, 5]);
+  expect(grouped[1].related.map(item => item.id)).toEqual([3, 2, 1]);
+  expect(grouped[1].numUsedInTours).toBe(3);
+  expect(screens.every(item => item.related.length === 0)).toBe(true);
+  expect(groupScreens(screens)).toEqual(grouped);
+});
+
+it('keeps orphaned screens available and terminates malformed parent cycles', () => {
+  const grouped = groupScreens([screen(1, 99), screen(2, 3), screen(3, 2), screen(4, 4)]);
+  const ids = grouped.flatMap(item => [item.id, ...item.related.map(child => child.id)]).sort();
+  expect(ids).toEqual([1, 2, 3, 4]);
+  expect(grouped.some(item => item.id === 1)).toBe(true);
+  expect(grouped.some(item => item.id === 2 && item.related[0].id === 3)).toBe(true);
+  expect(groupScreens([])).toEqual([]);
 });

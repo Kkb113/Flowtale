@@ -7,6 +7,7 @@ import com.sharefable.api.config.AppSettings;
 import com.sharefable.api.entity.EntityConfigKV;
 import com.sharefable.api.entity.User;
 import com.sharefable.api.service.OrgService;
+import com.sharefable.api.service.PrivateUploadService;
 import com.sharefable.api.service.UserService;
 import com.sharefable.api.service.WorkspaceService;
 import com.sharefable.api.transport.ObjectValidationResult;
@@ -20,6 +21,8 @@ import org.apache.commons.lang3.StringUtils;
 import org.javatuples.Pair;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
+import org.springframework.security.core.annotation.AuthenticationPrincipal;
+import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.server.ResponseStatusException;
 
@@ -36,6 +39,7 @@ public class WorkspaceController {
   private final UserService userService;
   private final AppSettings settings;
   private final OrgService orgService;
+  private final PrivateUploadService privateUploads;
 
   @RequestMapping(value = Routes.NEW_ORG, method = RequestMethod.POST, produces = MediaType.APPLICATION_JSON_VALUE)
   public ApiResp<RespOrg> createNewOrg(@RequestBody ReqNewOrg body, @AuthUser User user) {
@@ -56,9 +60,7 @@ public class WorkspaceController {
 
   @RequestMapping(value = Routes.ASSIGN_IMPLICIT_USER_ORG, method = RequestMethod.POST, produces = MediaType.APPLICATION_JSON_VALUE)
   public ApiResp<RespUser> assignDefaultOrgForUserUsingDomain(@AuthUser User user) {
-    log.warn("[deprecate] #assignUserToImplicitOrg after v1.2.41");
-    RespUser updatedUser = wsService.assignUserToImplicitOrg(user);
-    return ApiResp.<RespUser>builder().status(ApiResp.ResponseStatus.Success).data(updatedUser).build();
+    throw new ResponseStatusException(HttpStatus.GONE, "Joining a workspace requires an invitation from its administrator");
   }
 
   @RequestMapping(value = Routes.IAM, method = RequestMethod.GET, produces = MediaType.APPLICATION_JSON_VALUE)
@@ -111,16 +113,26 @@ public class WorkspaceController {
     @RequestParam("te") String contentTypeEncoded,
     @RequestParam("pre") String prefix,
     @RequestParam("fe") String encodedFilename,
-    @RequestParam("t") PvtAssetType assetType) {
-    String contentType = new String(org.springframework.util.Base64Utils.decodeFromString(contentTypeEncoded), StandardCharsets.UTF_8);
-    String filename = new String(org.springframework.util.Base64Utils.decodeFromString(encodedFilename), StandardCharsets.UTF_8);
-    RespUploadUrl resp = wsService.getPvtPreSignedUrl(contentType, prefix, filename, assetType);
+    @RequestParam("t") PvtAssetType assetType,
+    @AuthUser User user) {
+    String contentType;
+    String filename;
+    try {
+      contentType = new String(Base64.getDecoder().decode(contentTypeEncoded), StandardCharsets.UTF_8);
+      filename = new String(Base64.getDecoder().decode(encodedFilename), StandardCharsets.UTF_8);
+    } catch (IllegalArgumentException error) {
+      throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Invalid upload parameters");
+    }
+    RespUploadUrl resp = privateUploads.create(user, contentType, prefix, filename, assetType);
     return ApiResp.<RespUploadUrl>builder().status(ApiResp.ResponseStatus.Success).data(resp).build();
   }
 
   @RequestMapping(value = Routes.GET_ORG, method = RequestMethod.GET, produces = MediaType.APPLICATION_JSON_VALUE)
   public ApiResp<RespOrg> updateUserName(@RequestParam("if") Integer implicitFetch, @AuthUser User user) {
-    RespOrg org = implicitFetch == 1 ? wsService.getOrgByEmail(user.getEmail()) : wsService.getOrgForUser(user);
+    if (implicitFetch == 1) {
+      throw new ResponseStatusException(HttpStatus.GONE, "Workspace discovery by email domain is no longer supported; use an invitation");
+    }
+    RespOrg org = wsService.getOrgForUser(user);
     return ApiResp.<RespOrg>builder().status(ApiResp.ResponseStatus.Success).data(org).build();
   }
 
@@ -183,7 +195,12 @@ public class WorkspaceController {
   }
 
   @RequestMapping(value = Routes.ASSIGN_ORG_TO_USER, method = RequestMethod.POST, produces = MediaType.APPLICATION_JSON_VALUE)
-  public ApiResp<RespOrg> assignOrgToUser(@RequestBody ReqAssignOrgToUser body, @AuthUser User user) {
+  public ApiResp<RespOrg> assignOrgToUser(@RequestBody ReqAssignOrgToUser body, @AuthUser User user,
+                                       @AuthenticationPrincipal Jwt jwt) {
+    if (body.inviteCode() != null && body.inviteCode().isPresent()
+        && !Boolean.TRUE.equals(jwt.getClaimAsBoolean("email_verified"))) {
+      throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Verify your email address before accepting this invitation");
+    }
     Pair<RespUser, RespOrg> pair = wsService.assignOrgToUser(body, user);
     return ApiResp.<RespOrg>builder().status(ApiResp.ResponseStatus.Success).data(pair.getValue1()).build();
   }

@@ -26,15 +26,18 @@ public class OrgService {
     if (maybeOrg.isEmpty()) return new ArrayList<>();
     Org org = maybeOrg.get();
     Set<User> users = org.getUsers();
-    return users.stream().map(RespUser::from).collect(Collectors.toList());
+    return users.stream().map(user -> {
+      RespUser response = RespUser.from(user);
+      response.setActive(user.hasActiveMembership(orgId));
+      return response;
+    }).collect(Collectors.toList());
   }
 
   public User getOrgOwner(Long orgId) {
     Optional<Org> maybeOrg = orgRepo.findById(orgId);
     if (maybeOrg.isEmpty()) return null;
     Org org = maybeOrg.get();
-    Set<User> users = org.getUsers();
-    return users.stream().findFirst().orElse(null);
+    return org.getCreatedBy();
   }
 
   public int getCountOfActiveUsersInOrg(Long orgId) {
