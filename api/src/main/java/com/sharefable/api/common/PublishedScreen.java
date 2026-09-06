@@ -109,6 +109,19 @@ public final class PublishedScreen {
     for (Edit edit : ordered) if (redacts(edit)) redact(edit);
     scrubComments(root);
     boolean redacted = input.path("redacted").asBoolean() || !protectedPaths.isEmpty();
+    if (redacted) {
+      // The compiled child tree is authoritative. srcdoc is a second, unedited
+      // copy of frame contents and must never accompany a redacted publication.
+      removeFrameSources(root);
+      Set<String> seed = new HashSet<>();
+      for (JsonNode name : input.path("redactedCssVariables")) seed.add(name.asText());
+      var variables = PublishedCss.protectedVariables(PublishedCss.styles(root), seed);
+      PublishedCss.redactTree(root, variables);
+      if (!variables.isEmpty()) {
+        var names = screen.putArray("redactedCssVariables");
+        new TreeSet<>(variables).forEach(names::add);
+      }
+    }
     screen.put("redacted", redacted);
     screen.put("publicationSchema", 1);
     if (!blockedAssets.isEmpty()) {
@@ -234,6 +247,18 @@ public final class PublishedScreen {
         int end = text.indexOf("==ftext/");
         // Keep text-node identity for targeting, but discard its duplicated source content.
         object(node, "props").put("textContent", text.startsWith("textfid/") && end >= 0 ? text.substring(0, end) + "==ftext/" : "");
+      }
+      for (JsonNode child : node.path("chldrn")) queue.add((ObjectNode) child);
+    }
+  }
+
+  private static void removeFrameSources(ObjectNode root) {
+    var queue = new ArrayDeque<ObjectNode>(); queue.add(root);
+    while (!queue.isEmpty()) {
+      var node = queue.remove();
+      if (node.path("name").asText().equalsIgnoreCase("iframe") && node.get("attrs") instanceof ObjectNode attrs) {
+        List<String> names = new ArrayList<>(); attrs.fieldNames().forEachRemaining(names::add);
+        for (String name : names) if (name.equalsIgnoreCase("srcdoc")) attrs.remove(name);
       }
       for (JsonNode child : node.path("chldrn")) queue.add((ObjectNode) child);
     }

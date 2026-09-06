@@ -79,4 +79,15 @@ class ProxyAssetDeliveryTest {
     assertTrue(document.path("style").asText().contains(image));
     verifyNoInteractions(storage);
   }
+
+  @Test void generatedTextIsRemovedFromPublicCssAndItsVariablesButPrivateBytesAreRetained() throws Exception {
+    String css = ".secret::before{content:var(--label)}:root{--label:'PRIVATE'} .public{color:red}";
+    doReturn(new S3Service.StoredAsset(css.getBytes(StandardCharsets.UTF_8), "text/css")).when(storage).getAsset(any());
+    var document = new ObjectMapper().createObjectNode().put("href", source(CSS));
+    service.publish(document, 7L, "demo", 1, Set.of(), true, Set.of());
+    String published = new String(uploads.values().iterator().next(), StandardCharsets.UTF_8);
+    assertFalse(published.contains("PRIVATE"));
+    assertTrue(published.contains("color:red"));
+    assertEquals(css, new String(service.read(7L, CSS).bytes(), StandardCharsets.UTF_8));
+  }
 }

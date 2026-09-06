@@ -108,4 +108,27 @@ class PublishedScreenTest {
       result.screen().path("redactedAssetKeys").get(0).asText());
     assertFalse(result.edits().toString().contains("c2VjcmV0"));
   }
+
+  @Test void redactionRemovesGeneratedCssAndDuplicateFrameSourcesIncludingHistoricalOutput() throws Exception {
+    var input = (com.fasterxml.jackson.databind.node.ObjectNode) json.readTree(source);
+    var body = (com.fasterxml.jackson.databind.node.ObjectNode) input.path("docTree").path("chldrn").get(0);
+    body.put("name", "iframe");
+    ((com.fasterxml.jackson.databind.node.ObjectNode) body.path("attrs")).put("srcdoc", "<div>PRIVATE</div>");
+    ((com.fasterxml.jackson.databind.node.ObjectNode) body.path("props")).put("cssRules", ".secret::before{content:'PRIVATE';color:red}");
+    ((com.fasterxml.jackson.databind.node.ObjectNode) body.path("props")).putArray("adoptedStylesheets")
+      .add(".secret::after{content:var(--shadow)}:root{--shadow:'PRIVATE';--color:red}");
+    var local = json.readTree("{\"v\":1,\"edits\":{\"1.0.0\":{\"4\":[1,0,4,\"\",\"blur(4px)\",\"target\"]}}}");
+    var result = PublishedScreen.compile(input, local, json.readTree(empty));
+    assertFalse(result.screen().toString().contains("PRIVATE"));
+    assertFalse(result.screen().toString().contains("srcdoc"));
+    assertTrue(result.screen().toString().contains("color:red"));
+    assertTrue(input.toString().contains("<div>PRIVATE</div>"));
+    // Previously compiled snapshots no longer have their original redaction edit.
+    var legacy = result.screen().deepCopy();
+    var frame = (com.fasterxml.jackson.databind.node.ObjectNode) legacy.path("docTree").path("chldrn").get(0);
+    ((com.fasterxml.jackson.databind.node.ObjectNode) frame.path("attrs")).put("srcdoc", "PRIVATE");
+    ((com.fasterxml.jackson.databind.node.ObjectNode) frame.path("props")).put("cssRules", "div::after{content:'PRIVATE'}");
+    assertFalse(PublishedScreen.compile(legacy, result.edits(), json.readTree(empty)).screen().toString().contains("PRIVATE"));
+    assertTrue(PublishedScreen.compile(input, json.readTree(empty), json.readTree(empty)).screen().toString().contains("srcdoc"));
+  }
 }

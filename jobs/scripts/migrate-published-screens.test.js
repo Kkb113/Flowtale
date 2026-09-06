@@ -19,7 +19,7 @@ function fixture() {
       .filter(item => item.startsWith(`${request.Bucket}/${request.Prefix}`)).map(item => ({ Key: item.slice(request.Bucket.length + 1) })) };
     if (command.constructor.name === 'GetObjectCommand') {
       if (!objects.has(key)) { const error = new Error('Missing'); error.name = 'NoSuchKey'; throw error; }
-      return { Body: Readable.from([objects.get(key)]), ContentType: key.endsWith('.gif') ? 'image/gif' : 'application/json', CacheControl: 'max-age=3600' };
+      return { Body: Readable.from([objects.get(key)]), ContentType: key.endsWith('.gif') ? 'image/gif' : key.endsWith('.css') ? 'text/css' : 'application/json', CacheControl: 'max-age=3600' };
     }
     if (command.constructor.name === 'PutObjectCommand') { objects.set(key, Buffer.from(request.Body)); return {}; }
     if (command.constructor.name === 'DeleteObjectCommand') { objects.delete(key); return {}; }
@@ -76,4 +76,20 @@ test('compiler subprocess receives JSON through stdin without a shell', async ()
   const command = [process.execPath, '-e', 'let data="";process.stdin.on("data",x=>data+=x);process.stdin.on("end",()=>process.stdout.write(data));'];
   expect(await compileWithCommand(command, input)).toEqual(input);
   await expect(compileWithCommand([process.execPath, '-e', 'process.exit(1)'], input)).rejects.toThrow('rejected');
+});
+
+test('historical CSS repairs use the compiler, private backups and repeat without changes', async () => {
+  const { objects, params, compile } = fixture();
+  const key = 'root/ptour/assets-demo/1/proxy/source.css';
+  objects.set(`public/${key}`, Buffer.from('.secret::before{content:"PRIVATE";color:red}'));
+  compile.mockImplementation(async input => input.styles
+    ? { styles: input.styles.map(css => css.replace('content:"PRIVATE";', '')) }
+    : { screen: { publicationSchema: 1, redacted: true, docTree: {} }, edits: { v: 1, edits: {} }, redacted: true });
+  expect(await migratePublishedScreens(params)).toMatchObject({ changed: 7 });
+  expect(objects.get(`public/${key}`).toString()).toContain('PRIVATE');
+  await migratePublishedScreens({ ...params, apply: true });
+  expect(objects.get(`public/${key}`).toString()).toBe('.secret::before{color:red}');
+  expect([...objects].some(([name, bytes]) => name.startsWith('private/migration/published-screens/')
+    && name.endsWith(key) && bytes.toString().includes('PRIVATE'))).toBe(true);
+  expect(await migratePublishedScreens(params)).toMatchObject({ changed: 0 });
 });

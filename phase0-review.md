@@ -2,6 +2,16 @@
 
 Status: **Phase 0 core implementation accepted — September 6, 2026**. All final local validation gates pass. `implementation.md` remains the scope authority; production rollout requires the documented storage/CDN cutover. Billing, membership expansion and secondary product qualification remain deferred by user direction.
 
+## Follow-up privacy review closure (September 6)
+
+The review reproduced two public-byte leaks despite opaque blocks: CSS-generated text and a nested frame's original `srcdoc`. Both are fixed in the existing publication pipeline. Compiled frame children remain playable; private originals remain reversible. Inline, linked and adopted CSS use the same generated-content cleanup, including supplying custom properties, quoted delimiters, escaped property names and large inline assets. No editor or AI architecture change was introduced.
+
+The conservative [redaction constraint](implementation.md#8-phase-0-review-stability-and-foundation) is explicit: demos with redactions omit CSS-generated text/icons while preserving ordinary DOM text and unrelated styles. The [historical repair](api/published-screen-migration.md) now includes version-owned CSS and already-compiled frame snapshots, with verified private backups and resumable writes.
+
+Validation: **196 API tests and build; 103 worker tests and lint; 321 common/client/extension tests; 34/34 full product browser tests in 7.8 minutes; 5/5 publication browser tests rerun on the final build**. Contract synchronization and whitespace checks pass. Existing warnings remain. The final parsing regression verifies a 100,000-character inline asset without stack overflow, retaining its public bytes while removing generated private text.
+
+Local maintenance checked **95 HTML snapshots**, repaired **40 objects across 19 redacted versions**, and repeated with **zero remaining changes**. Both original review URLs were anonymously fetched again: HTTP 200, opaque blocks present, private markers absent. Existing local snapshots contain no nonempty adopted stylesheets; the added format is covered by compiler regression tests. Production repair/CDN invalidation remains a deployment step, not a claimed local-test outcome.
+
 ## Final core implementation checkpoint (September 6)
 
 This checkpoint supersedes the pending-work statements in the chronological notes below. The bounded core implementation is complete and reviewed. Final whole-product verification passed **34/34 cases in 4.4 minutes**, with no retries, forced clicks or suppressed page errors. Earlier failed runs exposed incomplete fixture source metadata, missing independent local entitlement setup and an ambiguous iframe locator; those fixtures were corrected before the full passing run.

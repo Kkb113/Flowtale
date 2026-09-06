@@ -470,6 +470,8 @@ Offscreen embeds lazy-load and reserve dimensions. Use a poster/start surface wh
 
 Further membership administration, seat/billing reconciliation and commercial-plan redesign are deferred. Standalone hub, dataset, custom-domain, analytics-dashboard and third-party integration expansion/qualification are also deferred; their existing code and passing regressions remain, and any shared dependency that breaks the core demo workflow remains in scope. The current billing setup is temporary: do not build a replacement billing architecture during Phase 0. Real provider replacement and new AI capabilities remain P3/P4. Record deferred work for later qualification rather than treating it as a Phase 0 blocker. This scope decision supersedes broader Phase 0 wording elsewhere in this document and older review checkpoints; it does not defer core security or data-loss defects.
 
+**Public redaction constraint:** Published frames use their compiled child trees, without redundant `srcdoc` originals. When a demo contains redactions, public CSS-generated content is blanked and its supplying variables are removed; ordinary DOM text and unrelated styles remain. This can omit decorative pseudo-element text/icons. Essential labels must be captured as DOM text. The [historical repair](api/published-screen-migration.md) applies the same policy to existing snapshots and version-owned CSS. Private authoring originals remain reversible.
+
 ### 8.1 Required work
 
 | Workstream | Required work and evidence |

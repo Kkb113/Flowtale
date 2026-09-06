@@ -597,10 +597,18 @@ public class EntityService extends ServiceBase {
         for (var key : compiled.screen().path("redactedAssetKeys")) blockedAssets.add(key.asText());
       }
       List<Callable<AssetFilePath>> tourInfoCopier = new ArrayList<>();
+      boolean redactCss = compiledScreens.values().stream().anyMatch(PublishedScreen.Result::redacted);
+      Set<String> cssVariables = new HashSet<>();
+      for (var compiled : compiledScreens.values()) {
+        for (var name : compiled.screen().path("redactedCssVariables")) cssVariables.add(name.asText());
+      }
+      if (redactCss) cssVariables = proxyDelivery.protectedCssVariables(
+        compiledScreens.values().stream().map(value -> (com.fasterxml.jackson.databind.JsonNode) value.screen()).toList(),
+        demoEntity.getBelongsToOrg(), blockedAssets, cssVariables);
       var publicTour = proxyDelivery.publish(objectMapper.readTree(s3Service.getObjectContent(assetFilePaths.getLeft())),
-        demoEntity.getBelongsToOrg(), demoEntity.getAssetPrefixHash(), nextVersion, blockedAssets);
+        demoEntity.getBelongsToOrg(), demoEntity.getAssetPrefixHash(), nextVersion, blockedAssets, redactCss, cssVariables);
       var publicLoader = proxyDelivery.publish(objectMapper.readTree(s3Service.getObjectContent(assetFilePaths.getMiddle())),
-        demoEntity.getBelongsToOrg(), demoEntity.getAssetPrefixHash(), nextVersion, blockedAssets);
+        demoEntity.getBelongsToOrg(), demoEntity.getAssetPrefixHash(), nextVersion, blockedAssets, redactCss, cssVariables);
       Callable<AssetFilePath> tourDataCopier = () -> s3Service.upload(toTourDataFilePath, objectMapper.writeValueAsBytes(publicTour), Map.of(
         HttpHeaders.CONTENT_TYPE, "application/json",
         HttpHeaders.CACHE_CONTROL, S3Config.getCachePolicyStr(S3Config.getEntityFiles().publishedDataFile().cachePolicy())
@@ -638,8 +646,8 @@ public class EntityService extends ServiceBase {
 
           var compiled = compiledScreens.get(screen.getId());
           redacted = compiled.redacted();
-          var playbackScreen = proxyDelivery.publish(compiled.screen(), demoEntity.getBelongsToOrg(), demoEntity.getAssetPrefixHash(), nextVersion, blockedAssets);
-          var playbackEdits = proxyDelivery.publish(compiled.edits(), demoEntity.getBelongsToOrg(), demoEntity.getAssetPrefixHash(), nextVersion, blockedAssets);
+          var playbackScreen = proxyDelivery.publish(compiled.screen(), demoEntity.getBelongsToOrg(), demoEntity.getAssetPrefixHash(), nextVersion, blockedAssets, redactCss, cssVariables);
+          var playbackEdits = proxyDelivery.publish(compiled.edits(), demoEntity.getBelongsToOrg(), demoEntity.getAssetPrefixHash(), nextVersion, blockedAssets, redactCss, cssVariables);
           tourInfoCopier.add(() -> s3Service.upload(publishedDocument, objectMapper.writeValueAsBytes(playbackScreen), Map.of(
             HttpHeaders.CONTENT_TYPE, "application/json",
             HttpHeaders.CACHE_CONTROL, S3Config.getCachePolicyStr(S3Config.DATA_FILE_CACHE_POLICY.Cache))));

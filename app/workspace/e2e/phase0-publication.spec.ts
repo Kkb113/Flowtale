@@ -34,13 +34,14 @@ test('private captured CSS renders in drafts and redacted image bytes never ente
   const cssKey = randomUUID();
   const privateKey = randomUUID();
   const publicKey = randomUUID();
+  const generatedSecret = `CSS_GENERATED_PRIVATE_${Date.now()}`;
   const privatePrefix = 'http://localhost:14566/fable-local-private/local/local/proxy_asset/';
   const { S3Client, PutObjectCommand } = require('../../../jobs/node_modules/@aws-sdk/client-s3');
   const storage = new S3Client({ region: 'ap-south-1', endpoint: 'http://localhost:14566', forcePathStyle: true,
     credentials: { accessKeyId: 'test', secretAccessKey: 'test' } });
   const pixels = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jF1sAAAAASUVORK5CYII=', 'base64');
   try {
-    for (const [key, body, type] of [[cssKey, `.secret{background-image:url('${privatePrefix}${privateKey}')} .public{background-image:url('${privatePrefix}${publicKey}')}`, 'text/css'],
+    for (const [key, body, type] of [[cssKey, `.secret{background-image:url('${privatePrefix}${privateKey}')} .secret::before{content:var(--label)} :root{--label:'${generatedSecret}'} .public{background-image:url('${privatePrefix}${publicKey}');color:rgb(1, 2, 3)}`, 'text/css'],
       [privateKey, pixels, 'image/png'], [publicKey, pixels, 'image/png']]) {
       await storage.send(new PutObjectCommand({ Bucket: 'fable-local-private', Key: `local/local/proxy_asset/${key}`, Body: body, ContentType: type }));
     }
@@ -81,6 +82,8 @@ test('private captured CSS renders in drafts and redacted image bytes never ente
   await page.goto(`/demo/${tour.rid}/${screen.rid}/${annotation.refId}`);
   const privateElement = page.frameLocator('iframe[title="Private styled capture"]').first().locator('.secret');
   await expect(privateElement).toHaveCSS('background-image', /blob:/, { timeout: 30000 });
+  await expect.poll(() => privateElement.evaluate(element => element.ownerDocument.defaultView!
+    .getComputedStyle(element, '::before').content)).toContain(generatedSecret);
   let revision = new Date(screen.updatedAt).getTime();
   for (const measured of [false, true]) {
     const changed = await request.post(`${base}/recordeledit`, { headers, data: { rid: screen.rid, expectedRevision: revision,
@@ -96,6 +99,9 @@ test('private captured CSS renders in drafts and redacted image bytes never ente
   const css = await request.get(assets + cssKey);
   expect(css.ok()).toBe(true);
   expect(await css.text()).not.toContain(privateKey);
+  expect(await css.text()).not.toContain(generatedSecret);
+  expect(await css.text()).toContain('color:rgb(1, 2, 3)');
+  expect(await (await request.get(`${base}/proxy-file/${cssKey}`, { headers })).text()).toContain(generatedSecret);
   expect(await css.text()).toContain('data:,');
   expect((await request.get(assets + privateKey)).ok()).toBe(false);
   expect(await (await request.get(assets + publicKey)).body()).toEqual(pixels);
@@ -158,7 +164,11 @@ test('opaque publication removes nested secrets and edit values from delivered s
     { 'f-id': 'private-target', title: marker, 'data-secret': marker },
     { nodeProps: { value: marker }, rect: { width: 220, height: 60 }, base64Img: marker });
   const document = { version: '2023-07-27', vpd: { w: 800, h: 600 }, isHTML4: false,
-    docTree: node('html', [node('head'), node('body', [node('h1', [node('#text', [], {}, { textContent: 'Public heading' })]), secret])]) };
+    docTree: node('html', [node('head', [node('style', [], {}, { cssRules: `.secret::before{content:'${marker}';color:red}` })]),
+      node('body', [node('h1', [node('#text', [], {}, { textContent: 'Public heading' })]), secret,
+        node('iframe', [node('html', [node('head'), node('body', [node('div', [node('#text', [], {}, { textContent: marker })],
+          { 'f-id': 'frame-secret' }), node('p', [node('#text', [], {}, { textContent: 'Public frame text' })])])])],
+        { srcdoc: `<html><body><div>${marker}</div></body></html>`, style: 'width:300px;height:150px' })])]) };
   const source = await request.post(`${base}/newscreen`, { headers, data: { name: 'Opaque fixture', type: 1,
     body: JSON.stringify(document) } });
   expect(source.ok()).toBe(true);
@@ -168,7 +178,8 @@ test('opaque publication removes nested secrets and edit values from delivered s
   const edited = await request.post(`${base}/recordeledit`, { headers, data: { rid: screen.rid,
     expectedRevision: new Date(screen.updatedAt).getTime(), editData: JSON.stringify({ v: 1, edits: { '1.1.1': {
       4: [1, 0, 4, '', 'blur(4px)', 'private-target', { width: 220, height: 60 }],
-      1: [2, marker, `${marker}_NEW`, 'private-target'] } } }) } });
+      1: [2, marker, `${marker}_NEW`, 'private-target'] },
+      '1.1.2.0.1.0': { 4: [1, 0, 4, '', 'blur(4px)', 'frame-secret', { width: 200, height: 40 }] } } }) } });
   expect(edited.ok(), await edited.text()).toBe(true);
   const theme = getSampleGlobalConfig();
   const tourDocument = createEmptyTourDataFile(theme);
@@ -199,6 +210,9 @@ test('opaque publication removes nested secrets and edit values from delivered s
   await expect(block).toHaveCSS('background-color', 'rgb(51, 65, 85)');
   await expect(block).toHaveCSS('width', '220px');
   await expect(block).toHaveCSS('height', '60px');
+  const nestedFrame = page.frameLocator('iframe').first().frameLocator('iframe').first().frameLocator('iframe').first();
+  await expect(nestedFrame.getByText('Public frame text', { exact: true })).toBeVisible();
+  await expect(nestedFrame.getByLabel('Redacted content')).toHaveCSS('background-color', 'rgb(51, 65, 85)');
   const activeAnnotation = page.frameLocator('iframe').first().frameLocator('iframe').first()
     .locator('.fable-annotations--container').getByText('Redaction fixture', { exact: true });
   await expect(activeAnnotation).toHaveCount(1);

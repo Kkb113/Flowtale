@@ -104,6 +104,7 @@ async function migratePublishedScreens({ s3, bucket, backupBucket, root, compile
     if (Body === null || !Body.equals(original.Body)) changes.set(key, { ...original, Body });
   };
   const redactions = new Map();
+  const cssVariables = new Map();
   const globals = new Map();
   let checked = 0;
   for (const key of keys) {
@@ -129,8 +130,30 @@ async function migratePublishedScreens({ s3, bucket, backupBucket, root, compile
       const id = `${demo}/${version}`;
       if (!redactions.has(id)) redactions.set(id, new Set());
       redactions.get(id).add(screen);
+      if (!cssVariables.has(id)) cssVariables.set(id, new Set());
+      for (const name of result.screen.redactedCssVariables || []) cssVariables.get(id).add(name);
     }
     checked++;
+  }
+  // Version-owned CSS is independently downloadable. Repair it with the same
+  // compiler and backup/resume plan as the screen, even after edits were flattened.
+  for (const [id] of redactions) {
+    const [demo, version] = id.split('/');
+    const prefix = `${root}/ptour/assets-${demo}/${version}/proxy/`;
+    const css = [];
+    for (const key of keys) if (key.startsWith(prefix)) {
+      const original = await read(key);
+      if (original.ContentType.toLowerCase().startsWith('text/css')) css.push({ key, original });
+    }
+    if (!css.length) continue;
+    const result = await compile({ styles: css.map(item => item.original.Body.toString('utf8')),
+      variables: [...cssVariables.get(id)] });
+    if (!Array.isArray(result?.styles) || result.styles.length !== css.length
+        || result.styles.some(style => typeof style !== 'string')) throw new Error('Invalid CSS compilation result');
+    css.forEach(({ key, original }, index) => {
+      const Body = Buffer.from(result.styles[index]);
+      if (!Body.equals(original.Body)) changes.set(key, { ...original, Body });
+    });
   }
   // All screen snapshots are compiled before removing now-flattened global edits.
   for (const [key, value] of globals) await change(key, { v: value.v, edits: {} });

@@ -16,4 +16,8 @@ Set `FABLE_PUBLICATION_COMPILER` to a JSON array containing that command and its
 4. Repeat the dry run and require `changed: 0` and no pending plan. Validate anonymous player responses and authorized authoring access.
 5. For CDN delivery, invalidate the reported paths and wait for completion before ending maintenance. Preserve the applying report and invalidation ID; a zero-change dry run does not establish cache revocation.
 
-This repair covers published JSON and the listed publication derivatives. Complete the [capture asset privacy cutover](capture-asset-migration.md) to migrate image, thumbnail and proxy originals and verify CDN revocation. JSON repair alone does not establish asset privacy.
+The compiler removes redundant iframe `srcdoc` from redacted screens; playback reconstructs the compiled child tree. For demos containing redactions, CSS-generated content is blanked and its supplying custom properties are removed from public inline and linked CSS. Ordinary DOM text, unrelated styles and private originals are preserved. This conservative rule can omit decorative pseudo-element text/icons; essential labels should be captured as DOM text. It avoids introducing a second browser/style engine into the publication service.
+
+Rerun this repair after upgrading the compiler even if the previous run reported zero changes. Already-compiled screens retain their redaction marker, so flattened edits do not bypass cleanup. Version-owned CSS assets are included in the verified backup/resume plan. Finish any existing pending plan first, then run a fresh repair and require zero remaining changes.
+
+This repair covers published JSON, version-owned CSS and the listed publication derivatives. Complete the [capture asset privacy cutover](capture-asset-migration.md) to migrate image, thumbnail and proxy originals and verify CDN revocation. JSON repair alone does not establish asset privacy.
