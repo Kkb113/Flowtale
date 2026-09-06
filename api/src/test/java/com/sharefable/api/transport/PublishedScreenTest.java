@@ -117,6 +117,7 @@ class PublishedScreenTest {
     ((com.fasterxml.jackson.databind.node.ObjectNode) body.path("props")).put("cssRules", ".secret::before{content:'PRIVATE';color:red}");
     ((com.fasterxml.jackson.databind.node.ObjectNode) body.path("props")).putArray("adoptedStylesheets")
       .add(".secret::after{content:var(--shadow)}:root{--shadow:'PRIVATE';--color:red}");
+    ((com.fasterxml.jackson.databind.node.ObjectNode) body.path("chldrn").get(0).path("attrs")).put("class", "secret");
     var local = json.readTree("{\"v\":1,\"edits\":{\"1.0.0\":{\"4\":[1,0,4,\"\",\"blur(4px)\",\"target\"]}}}");
     var result = PublishedScreen.compile(input, local, json.readTree(empty));
     assertFalse(result.screen().toString().contains("PRIVATE"));
@@ -125,6 +126,7 @@ class PublishedScreenTest {
     assertTrue(input.toString().contains("<div>PRIVATE</div>"));
     // Previously compiled snapshots no longer have their original redaction edit.
     var legacy = result.screen().deepCopy();
+    legacy.put("publicationSchema", 1);
     var frame = (com.fasterxml.jackson.databind.node.ObjectNode) legacy.path("docTree").path("chldrn").get(0);
     ((com.fasterxml.jackson.databind.node.ObjectNode) frame.path("attrs")).put("srcdoc", "PRIVATE");
     ((com.fasterxml.jackson.databind.node.ObjectNode) frame.path("props")).put("cssRules", "div::after{content:'PRIVATE'}");

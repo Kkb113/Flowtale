@@ -41,7 +41,7 @@ test('private captured CSS renders in drafts and redacted image bytes never ente
     credentials: { accessKeyId: 'test', secretAccessKey: 'test' } });
   const pixels = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jF1sAAAAASUVORK5CYII=', 'base64');
   try {
-    for (const [key, body, type] of [[cssKey, `.secret{background-image:url('${privatePrefix}${privateKey}')} .secret::before{content:var(--label)} :root{--label:'${generatedSecret}'} .public{background-image:url('${privatePrefix}${publicKey}');color:rgb(1, 2, 3)}`, 'text/css'],
+    for (const [key, body, type] of [[cssKey, `.secret{background-image:url('${privatePrefix}${privateKey}');--label:'${generatedSecret}'} .secret::before,.public::before{content:var(--label)} :root{--label:'PUBLIC_DEFAULT'} .public{--label:'PUBLIC_ICON';background-image:url('${privatePrefix}${publicKey}');color:rgb(1, 2, 3)} .public::after{content:'✓'}`, 'text/css'],
       [privateKey, pixels, 'image/png'], [publicKey, pixels, 'image/png']]) {
       await storage.send(new PutObjectCommand({ Bucket: 'fable-local-private', Key: `local/local/proxy_asset/${key}`, Body: body, ContentType: type }));
     }
@@ -61,7 +61,8 @@ test('private captured CSS renders in drafts and redacted image bytes never ente
     type: 1, name, attrs, props: { proxyUrlMap: {}, ...props }, chldrn: children, sv: 2 });
   const source = await request.post(`${base}/newscreen`, { headers, data: { name: 'Private styled capture', type: 1, url: 'https://example.com/',
     body: JSON.stringify({ version: '2023-07-27', vpd: { w: 800, h: 600 }, isHTML4: false, docTree: node('html', [
-      node('head', [node('link', [], { rel: 'stylesheet', href: privatePrefix + cssKey }, { isStylesheet: true })]),
+      node('head', [node('style', [], {}, { cssRules: ":root{--label:'PUBLIC_INLINE_DEFAULT'} .secret::before{content:var(--label)}" }),
+        node('link', [], { rel: 'stylesheet', href: privatePrefix + cssKey }, { isStylesheet: true })]),
       node('body', [node('div', [], { class: 'secret', 'f-id': 'secret', style: 'width:220px;height:60px' }),
         node('div', [], { class: 'public', style: 'width:100px;height:40px' })])]) }) } });
   expect(source.ok(), await source.text()).toBe(true);
@@ -96,18 +97,44 @@ test('private captured CSS renders in drafts and redacted image bytes never ente
   }
   const config = (await (await request.get('http://localhost:18080/v1/cconfig')).json()).data;
   const assets = `${config.pubTourAssetPath}assets-${tour.assetPrefixHash}/1/proxy/`;
+  const publicDocument = await request.get(`${config.pubTourAssetPath}assets-${tour.assetPrefixHash}/1/screens/${screen.assetPrefixHash}/index.json`);
+  expect(publicDocument.ok()).toBe(true);
+  expect(publicDocument.headers()['x-amz-meta-fable-publication-schema']).toBe('2');
+  expect(await publicDocument.text()).toContain('PUBLIC_INLINE_DEFAULT');
   const css = await request.get(assets + cssKey);
   expect(css.ok()).toBe(true);
   expect(await css.text()).not.toContain(privateKey);
   expect(await css.text()).not.toContain(generatedSecret);
+  expect(await css.text()).toContain('PUBLIC_ICON');
+  expect(await css.text()).toContain('PUBLIC_DEFAULT');
   expect(await css.text()).toContain('color:rgb(1, 2, 3)');
   expect(await (await request.get(`${base}/proxy-file/${cssKey}`, { headers })).text()).toContain(generatedSecret);
   expect(await css.text()).toContain('data:,');
   expect((await request.get(assets + privateKey)).ok()).toBe(false);
   expect(await (await request.get(assets + publicKey)).body()).toEqual(pixels);
+  // Model an older publication with the blanket-cleanup regression. Republishing
+  // must use the retained private source, never copy the damaged public stylesheet.
+  const legacyStorage = new S3Client({ region: 'ap-south-1', endpoint: 'http://localhost:14566', forcePathStyle: true,
+    credentials: { accessKeyId: 'test', secretAccessKey: 'test' } });
+  try {
+    await legacyStorage.send(new PutObjectCommand({ Bucket: 'fable-local-assets',
+      Key: `local/ptour/assets-${tour.assetPrefixHash}/1/proxy/${cssKey}`,
+      Body: (await css.text()).replaceAll('PUBLIC_ICON', '').replaceAll('✓', ''), ContentType: 'text/css' }));
+  } finally { legacyStorage.destroy(); }
+  const republished = await request.post(`${base}/tpub`, { headers, data: { tourRid: tour.rid } });
+  expect(republished.ok(), await republished.text()).toBe(true);
+  const repairedCss = await request.get(assets.replace('/1/proxy/', '/2/proxy/') + cssKey);
+  expect(repairedCss.ok()).toBe(true);
+  expect(await repairedCss.text()).toContain('PUBLIC_ICON');
+  expect(await repairedCss.text()).not.toContain(generatedSecret);
   await page.goto(`/live/demo/${tour.rid}`);
   await expect(page.frameLocator('iframe').first().frameLocator('iframe').first().getByLabel('Redacted content'))
     .toHaveCSS('background-color', 'rgb(51, 65, 85)');
+  const publicElement = page.frameLocator('iframe').first().frameLocator('iframe').first().locator('.public');
+  await expect.poll(() => publicElement.evaluate(element => element.ownerDocument.defaultView!
+    .getComputedStyle(element, '::before').content)).toBe('"PUBLIC_ICON"');
+  await expect.poll(() => publicElement.evaluate(element => element.ownerDocument.defaultView!
+    .getComputedStyle(element, '::after').content)).toBe('"✓"');
 });
 
 test('publication excludes local and global undo values while preserving private drafts', async ({ request }) => {
@@ -161,13 +188,14 @@ test('opaque publication removes nested secrets and edit values from delivered s
   const node = (name: string, children: any[] = [], attrs: any = {}, props: any = {}): any => ({
     type: name === '#text' ? 3 : 1, name, attrs, props: { proxyUrlMap: {}, ...props }, chldrn: children, sv: 2 });
   const secret = node('div', [node('span', [node('#text', [], {}, { textContent: marker })])],
-    { 'f-id': 'private-target', title: marker, 'data-secret': marker },
+    { class: 'secret', 'f-id': 'private-target', title: marker, 'data-secret': marker },
     { nodeProps: { value: marker }, rect: { width: 220, height: 60 }, base64Img: marker });
   const document = { version: '2023-07-27', vpd: { w: 800, h: 600 }, isHTML4: false,
-    docTree: node('html', [node('head', [node('style', [], {}, { cssRules: `.secret::before{content:'${marker}';color:red}` })]),
+    docTree: node('html', [node('head', [node('style', [], {}, { cssRules: `.secret::before{content:'${marker}';color:red} h1::before{content:'PUBLIC_HEADING_ICON'}` })]),
       node('body', [node('h1', [node('#text', [], {}, { textContent: 'Public heading' })]), secret,
-        node('iframe', [node('html', [node('head'), node('body', [node('div', [node('#text', [], {}, { textContent: marker })],
-          { 'f-id': 'frame-secret' }), node('p', [node('#text', [], {}, { textContent: 'Public frame text' })])])])],
+        node('iframe', [node('html', [node('head', [node('style', [], {}, { cssRules: `.secret::before{content:'${marker}_FRAME'} p::before{content:'PUBLIC_FRAME_ICON'}` })]),
+          node('body', [node('div', [node('#text', [], {}, { textContent: marker })],
+          { class: 'secret', 'f-id': 'frame-secret' }), node('p', [node('#text', [], {}, { textContent: 'Public frame text' })])])])],
         { srcdoc: `<html><body><div>${marker}</div></body></html>`, style: 'width:300px;height:150px' })])]) };
   const source = await request.post(`${base}/newscreen`, { headers, data: { name: 'Opaque fixture', type: 1,
     body: JSON.stringify(document) } });
@@ -213,6 +241,8 @@ test('opaque publication removes nested secrets and edit values from delivered s
   const nestedFrame = page.frameLocator('iframe').first().frameLocator('iframe').first().frameLocator('iframe').first();
   await expect(nestedFrame.getByText('Public frame text', { exact: true })).toBeVisible();
   await expect(nestedFrame.getByLabel('Redacted content')).toHaveCSS('background-color', 'rgb(51, 65, 85)');
+  await expect.poll(() => nestedFrame.locator('p').evaluate(element => element.ownerDocument.defaultView!
+    .getComputedStyle(element, '::before').content)).toBe('"PUBLIC_FRAME_ICON"');
   const activeAnnotation = page.frameLocator('iframe').first().frameLocator('iframe').first()
     .locator('.fable-annotations--container').getByText('Redaction fixture', { exact: true });
   await expect(activeAnnotation).toHaveCount(1);

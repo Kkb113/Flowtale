@@ -60,7 +60,7 @@ async function migratePublishedScreens({ s3, bucket, backupBucket, root, compile
         chunks.push(Buffer.from(chunk));
       }
     } finally { response.Body?.destroy?.(); }
-    const result = { Body: Buffer.concat(chunks), CacheControl: response.CacheControl, ContentType: response.ContentType || 'application/json' };
+    const result = { Body: Buffer.concat(chunks), Metadata: response.Metadata || {}, CacheControl: response.CacheControl, ContentType: response.ContentType || 'application/json' };
     if (Bucket === bucket) originals.set(Key, result);
     return result;
   };
@@ -82,7 +82,7 @@ async function migratePublishedScreens({ s3, bucket, backupBucket, root, compile
       } else {
         const { Body } = await read(entry.nextKey, backupBucket);
         if (createHash('sha256').update(Body).digest('hex') !== entry.digest) throw new Error('Staged repair checksum mismatch');
-        await s3.send(new PutObjectCommand({ Bucket: bucket, Key: entry.key, Body, ContentType: entry.contentType, CacheControl: entry.cacheControl }));
+        await s3.send(new PutObjectCommand({ Bucket: bucket, Key: entry.key, Body, ContentType: entry.contentType, CacheControl: entry.cacheControl, Metadata: entry.metadata || {} }));
         originals.delete(entry.key);
         if (!(await read(entry.key)).Body.equals(Body)) throw new Error(`Read-back verification failed: ${entry.key}`);
       }
@@ -105,6 +105,7 @@ async function migratePublishedScreens({ s3, bucket, backupBucket, root, compile
   };
   const redactions = new Map();
   const cssVariables = new Map();
+  const legacyCssVersions = new Set();
   const globals = new Map();
   let checked = 0;
   for (const key of keys) {
@@ -119,15 +120,17 @@ async function migratePublishedScreens({ s3, bucket, backupBucket, root, compile
     if (!globals.has(globalKey)) globals.set(globalKey, await json(globalKey));
     const source = await json(key);
     // A marker in an old captured document is not proof that its bytes were compiled.
+    const selective = source.publicationSchema === 2 && (await read(key)).Metadata['fable-publication-schema'] === '2';
     let result;
-    try { result = await compile({ source, local: await json(localKey), global: globals.get(globalKey) }); }
+    try { result = await compile({ source: selective ? source : { ...source, publicationSchema: 1 }, local: await json(localKey), global: globals.get(globalKey) }); }
     catch { throw new Error(`Repair rejected for ${key}; resolve its legacy edits before retrying`); }
-    if (result?.screen?.publicationSchema !== 1 || typeof result.redacted !== 'boolean' || !result.edits?.edits) throw new Error(`Invalid compilation result for ${key}`);
+    if (![1, 2].includes(result?.screen?.publicationSchema) || typeof result.redacted !== 'boolean' || !result.edits?.edits) throw new Error(`Invalid compilation result for ${key}`);
     await change(key, result.screen);
     await change(localKey, result.edits);
     const redacted = result.redacted;
     if (redacted) {
       const id = `${demo}/${version}`;
+      if (!selective) legacyCssVersions.add(id);
       if (!redactions.has(id)) redactions.set(id, new Set());
       redactions.get(id).add(screen);
       if (!cssVariables.has(id)) cssVariables.set(id, new Set());
@@ -138,6 +141,7 @@ async function migratePublishedScreens({ s3, bucket, backupBucket, root, compile
   // Version-owned CSS is independently downloadable. Repair it with the same
   // compiler and backup/resume plan as the screen, even after edits were flattened.
   for (const [id] of redactions) {
+    if (!legacyCssVersions.has(id)) continue;
     const [demo, version] = id.split('/');
     const prefix = `${root}/ptour/assets-${demo}/${version}/proxy/`;
     const css = [];
@@ -196,7 +200,7 @@ async function migratePublishedScreens({ s3, bucket, backupBucket, root, compile
       const nextKey = `migration/published-screens/staged/${digest}/${key}`;
       await s3.send(new PutObjectCommand({ Bucket: backupBucket, Key: nextKey, ...value, CacheControl: 'no-store' }));
       if (!(await read(nextKey, backupBucket)).Body.equals(value.Body)) throw new Error(`Staged repair verification failed: ${key}`);
-      entries.push({ key, nextKey, digest, contentType: value.ContentType, cacheControl: value.CacheControl });
+      entries.push({ key, nextKey, digest, contentType: value.ContentType, cacheControl: value.CacheControl, metadata: value.Metadata });
     }
     if (entries.length) {
       const plan = { bucket, root, complete: false, entries, report: { checked, changed: changes.size,

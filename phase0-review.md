@@ -2,11 +2,21 @@
 
 Status: **Phase 0 core implementation accepted — September 6, 2026**. All final local validation gates pass. `implementation.md` remains the scope authority; production rollout requires the documented storage/CDN cutover. Billing, membership expansion and secondary product qualification remain deferred by user direction.
 
+## Selective generated-content correction (September 6)
+
+This follow-up supersedes the blanket CSS omission described in the prior privacy checkpoint. Redacting an element now removes its identified generated CSS values while preserving unrelated labels/icons, including different values that use the same custom-property name. Matching protected values shared elsewhere are still removed. Private captures remain unchanged; frame and shadow-root style scopes are resolved separately, with inherited variables resolved at their defining ancestor. Live cleanup waits for linked styles before modifying inline CSS, so incomplete style context cannot erase a public default.
+
+The existing jsoup selector dependency is updated for modern selectors. Regression coverage includes interaction/media selectors, escaped classes, quoted selector values, custom-property inheritance, nested frames, shadow roots and exclusion of private matching context from serialized output. Unsupported generated-content selectors reject publication with an actionable error. This is conservative matching across possible rules/states, not a replacement browser cascade engine.
+
+Historical repair trusts API-written S3 metadata together with schema 2, preserves it through staged/resumed writes, and retains legacy privacy cleanup for untrusted snapshots. Tests verify that a forged JSON schema marker cannot skip that cleanup. Previously omitted labels/icons are recovered by reviewing the retained private draft and publishing a new version; historical versions are not overwritten with current draft content or unsanitized backups.
+
+Component validation: **205 API tests and build, 105 worker tests and lint, 321 common/client/extension tests** pass. The full product browser suite passed **34/34 in 7.3 minutes**, followed by **5/5 publication tests on the final build** after the inline/linked ordering correction. Browser assertions cover rendered public labels/icons, nested-frame icons, private CSS bytes, trusted storage metadata, and republishing from retained private sources to restore a deliberately damaged older fixture. Existing warnings remain; generated contract synchronization and whitespace checks pass. No production deployment or historical-version overwrite was performed.
+
 ## Follow-up privacy review closure (September 6)
 
 The review reproduced two public-byte leaks despite opaque blocks: CSS-generated text and a nested frame's original `srcdoc`. Both are fixed in the existing publication pipeline. Compiled frame children remain playable; private originals remain reversible. Inline, linked and adopted CSS use the same generated-content cleanup, including supplying custom properties, quoted delimiters, escaped property names and large inline assets. No editor or AI architecture change was introduced.
 
-The conservative [redaction constraint](implementation.md#8-phase-0-review-stability-and-foundation) is explicit: demos with redactions omit CSS-generated text/icons while preserving ordinary DOM text and unrelated styles. The [historical repair](api/published-screen-migration.md) now includes version-owned CSS and already-compiled frame snapshots, with verified private backups and resumable writes.
+At this historical checkpoint, demos with redactions omitted CSS-generated text/icons while preserving ordinary DOM text and unrelated styles. The selective correction above supersedes that limitation. The [historical repair](api/published-screen-migration.md) includes version-owned CSS and already-compiled frame snapshots, with verified private backups and resumable writes.
 
 Validation: **196 API tests and build; 103 worker tests and lint; 321 common/client/extension tests; 34/34 full product browser tests in 7.8 minutes; 5/5 publication browser tests rerun on the final build**. Contract synchronization and whitespace checks pass. Existing warnings remain. The final parsing regression verifies a 100,000-character inline asset without stack overflow, retaining its public bytes while removing generated private text.
 

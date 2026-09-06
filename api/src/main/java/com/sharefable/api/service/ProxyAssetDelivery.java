@@ -4,6 +4,8 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.*;
 import com.sharefable.api.common.AssetFilePath;
 import com.sharefable.api.common.PublishedCss;
+import com.sharefable.api.common.PublishedScreen;
+import com.sharefable.api.common.GeneratedContentRedaction;
 import com.sharefable.api.config.S3Config;
 import com.sharefable.api.entity.ProxyAssetAccess;
 import com.sharefable.api.repo.ProxyAssetAccessRepo;
@@ -78,19 +80,23 @@ public class ProxyAssetDelivery {
   }
 
   public JsonNode publish(JsonNode document, Long org, String demoHash, int version, Set<String> blocked,
-                          boolean redactCss, Set<String> variables) throws IOException {
+                          boolean redactCss, Set<String> sensitiveText) throws IOException {
     var publication = new Publication(org, demoHash, version, blocked);
     var copy = document.deepCopy();
-    if (redactCss) publication.prepareCss(copy, variables);
+    publication.redactCss = redactCss;
+    publication.sensitiveText = sensitiveText;
+    if (redactCss) PublishedCss.redactTreeText(copy, sensitiveText);
     return publication.rewrite(copy);
   }
 
-  public Set<String> protectedCssVariables(Collection<JsonNode> documents, Long org, Set<String> blocked, Set<String> seed) throws IOException {
-    var input = JsonNodeFactory.instance.arrayNode();
-    documents.forEach(input::add);
+  public Set<String> protectedCssText(Collection<PublishedScreen.Result> screens, Long org, Set<String> blocked) throws IOException {
     var publication = new Publication(org, "", 0, blocked);
-    publication.prepareCss(input.deepCopy(), seed);
-    return publication.cssVariables;
+    Set<String> sensitive = new HashSet<>();
+    for (var screen : screens) if (!screen.cssTargets().isEmpty()) {
+      var styles = publication.stylesheets(screen.cssSource());
+      sensitive.addAll(GeneratedContentRedaction.collect(screen.cssSource(), screen.cssTargets(), styles));
+    }
+    return sensitive;
   }
 
   private final class Publication {
@@ -101,31 +107,30 @@ public class ProxyAssetDelivery {
     final Pattern pattern = references();
     final Map<String, String> copied = new HashMap<>();
     final Map<String, S3Service.StoredAsset> sources = new HashMap<>();
-    Set<String> cssVariables = Set.of();
+    Set<String> sensitiveText = Set.of();
     boolean redactCss;
     int bytes;
     Publication(Long org, String demoHash, int version, Set<String> blocked) {
       this.org = org; this.demoHash = demoHash; this.version = version; this.blocked = blocked;
     }
 
-    void prepareCss(JsonNode document, Set<String> seed) throws IOException {
-      redactCss = true;
-      List<String> styles = new ArrayList<>(PublishedCss.styles(document));
+    Map<String, String> stylesheets(JsonNode document) throws IOException {
+      Map<String, String> styles = new HashMap<>();
+      Set<String> visited = new HashSet<>();
       var pending = new ArrayDeque<String>(); pending.add(document.toString());
       while (!pending.isEmpty()) {
         var matcher = pattern.matcher(pending.remove());
         while (matcher.find()) {
           String key = matcher.group(1);
-          if (blocked.contains(key) || sources.containsKey(key)) continue;
+          if (blocked.contains(key) || !visited.add(key)) continue;
           var asset = source(key);
           if (asset.contentType().toLowerCase(Locale.ROOT).startsWith("text/css")) {
             String css = new String(asset.bytes(), StandardCharsets.UTF_8);
-            styles.add(css); pending.add(css);
+            styles.put(key, css); pending.add(css);
           }
         }
       }
-      cssVariables = PublishedCss.protectedVariables(styles, seed);
-      PublishedCss.redactTree(document, cssVariables);
+      return styles;
     }
 
     S3Service.StoredAsset source(String key) throws IOException {
@@ -180,7 +185,7 @@ public class ProxyAssetDelivery {
       byte[] content = source.bytes();
       if (source.contentType().toLowerCase(Locale.ROOT).startsWith("text/css")) {
         String css = new String(content, StandardCharsets.UTF_8);
-        content = rewriteText(redactCss ? PublishedCss.redact(css, cssVariables) : css).getBytes(StandardCharsets.UTF_8);
+        content = rewriteText(redactCss ? PublishedCss.redactText(css, sensitiveText) : css).getBytes(StandardCharsets.UTF_8);
       }
       storage.upload(target, content, Map.of("Content-Type", source.contentType(), "Cache-Control", "max-age=2592000"));
       return target.getS3UriToFile();

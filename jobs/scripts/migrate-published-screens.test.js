@@ -3,6 +3,7 @@ const { migratePublishedScreens, compileWithCommand } = require('./migrate-publi
 
 function fixture() {
   const objects = new Map();
+  const metadata = new Map();
   const put = (key, value) => objects.set(`public/${key}`, Buffer.from(JSON.stringify(value)));
   put('root/ptour/assets-demo/1/screens/screen/index.json', { private: 'PRIVATE', docTree: {} });
   put('root/ptour/assets-demo/1/screens/screen/edits.json', { v: 1, edits: { private: 'PRIVATE' } });
@@ -19,14 +20,14 @@ function fixture() {
       .filter(item => item.startsWith(`${request.Bucket}/${request.Prefix}`)).map(item => ({ Key: item.slice(request.Bucket.length + 1) })) };
     if (command.constructor.name === 'GetObjectCommand') {
       if (!objects.has(key)) { const error = new Error('Missing'); error.name = 'NoSuchKey'; throw error; }
-      return { Body: Readable.from([objects.get(key)]), ContentType: key.endsWith('.gif') ? 'image/gif' : key.endsWith('.css') ? 'text/css' : 'application/json', CacheControl: 'max-age=3600' };
+      return { Metadata: metadata.get(key) || {}, Body: Readable.from([objects.get(key)]), ContentType: key.endsWith('.gif') ? 'image/gif' : key.endsWith('.css') ? 'text/css' : 'application/json', CacheControl: 'max-age=3600' };
     }
-    if (command.constructor.name === 'PutObjectCommand') { objects.set(key, Buffer.from(request.Body)); return {}; }
+    if (command.constructor.name === 'PutObjectCommand') { objects.set(key, Buffer.from(request.Body)); metadata.set(key, request.Metadata || {}); return {}; }
     if (command.constructor.name === 'DeleteObjectCommand') { objects.delete(key); return {}; }
     throw new Error('Unexpected storage operation');
   }) };
   const compile = jest.fn(async () => ({ screen: { publicationSchema: 1, redacted: true, docTree: { replacement: true } }, edits: { v: 1, edits: {} }, redacted: true }));
-  return { objects, s3, compile, params: { s3, compile, bucket: 'public', backupBucket: 'private', root: 'root' } };
+  return { objects, metadata, s3, compile, params: { s3, compile, bucket: 'public', backupBucket: 'private', root: 'root' } };
 }
 
 test('repairs only public snapshots, removes unsafe derivative references and repeats without changes', async () => {
@@ -92,4 +93,35 @@ test('historical CSS repairs use the compiler, private backups and repeat withou
   expect([...objects].some(([name, bytes]) => name.startsWith('private/migration/published-screens/')
     && name.endsWith(key) && bytes.toString().includes('PRIVATE'))).toBe(true);
   expect(await migratePublishedScreens(params)).toMatchObject({ changed: 0 });
+});
+
+test('selectively compiled snapshots never run the legacy blanket CSS repair', async () => {
+  const { objects, metadata, params, compile } = fixture();
+  metadata.set('public/root/ptour/assets-demo/1/screens/screen/index.json', { 'fable-publication-schema': '2' });
+  const screen = { publicationSchema: 2, redacted: true, docTree: { replacement: true } };
+  objects.set('public/root/ptour/assets-demo/1/screens/screen/index.json', Buffer.from(JSON.stringify({ ...screen, obsolete: true })));
+  const key = 'public/root/ptour/assets-demo/1/proxy/public.css';
+  objects.set(key, Buffer.from('.public::before{content:"PUBLIC_ICON"}'));
+  compile.mockImplementation(async input => {
+    if (input.styles) throw new Error('Modern CSS must not use legacy blanket cleanup');
+    return { screen, edits: { v: 1, edits: {} }, redacted: true };
+  });
+  await migratePublishedScreens({ ...params, apply: true });
+  expect(objects.get(key).toString()).toContain('PUBLIC_ICON');
+  expect(metadata.get('public/root/ptour/assets-demo/1/screens/screen/index.json')).toEqual({ 'fable-publication-schema': '2' });
+  expect(await migratePublishedScreens(params)).toMatchObject({ changed: 0 });
+});
+
+test('an untrusted schema marker cannot bypass historical CSS privacy repair', async () => {
+  const { objects, params, compile } = fixture();
+  const screen = { publicationSchema: 2, redacted: true, docTree: {} };
+  objects.set('public/root/ptour/assets-demo/1/screens/screen/index.json', Buffer.from(JSON.stringify(screen)));
+  const key = 'public/root/ptour/assets-demo/1/proxy/private.css';
+  objects.set(key, Buffer.from('.secret::before{content:"PRIVATE"}'));
+  compile.mockImplementation(async input => input.styles
+    ? { styles: input.styles.map(css => css.replace('PRIVATE', '')) }
+    : { screen, edits: { v: 1, edits: {} }, redacted: true });
+  await migratePublishedScreens({ ...params, apply: true });
+  expect(objects.get(key).toString()).not.toContain('PRIVATE');
+  expect(compile.mock.calls.find(([input]) => input.source)[0].source.publicationSchema).toBe(1);
 });

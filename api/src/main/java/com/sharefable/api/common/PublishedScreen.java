@@ -11,11 +11,22 @@ public final class PublishedScreen {
   private static final Pattern INLINE_IMAGE = Pattern.compile("data:image/(?:png|jpeg|gif|webp|avif);base64,[A-Za-z0-9+/=]+");
   private PublishedScreen() {}
   private static final JsonNodeFactory JSON = JsonNodeFactory.instance;
-  public record Result(ObjectNode screen, ObjectNode edits, boolean redacted) {}
+  public record Result(ObjectNode screen, ObjectNode edits, boolean redacted,
+      @com.fasterxml.jackson.annotation.JsonIgnore JsonNode cssSource,
+      @com.fasterxml.jackson.annotation.JsonIgnore Set<String> cssTargets) {}
   private record Target(ObjectNode node, String path) {}
   private record Edit(Target target, int type, ArrayNode tuple, long time) {}
 
   public static Result compile(JsonNode source, JsonNode local, JsonNode global) {
+    return compile(source, local, global, false);
+  }
+
+  /** Internal publication stage: resolve CSS only after linked private styles are loaded. */
+  public static Result prepare(JsonNode source, JsonNode local, JsonNode global) {
+    return compile(source, local, global, true);
+  }
+
+  private static Result compile(JsonNode source, JsonNode local, JsonNode global, boolean deferCss) {
     if (!(source instanceof ObjectNode input) || !input.path("docTree").isObject()) {
       throw new IllegalArgumentException("Screen content is invalid; repair the screen before publishing");
     }
@@ -113,22 +124,26 @@ public final class PublishedScreen {
       // The compiled child tree is authoritative. srcdoc is a second, unedited
       // copy of frame contents and must never accompany a redacted publication.
       removeFrameSources(root);
-      Set<String> seed = new HashSet<>();
-      for (JsonNode name : input.path("redactedCssVariables")) seed.add(name.asText());
-      var variables = PublishedCss.protectedVariables(PublishedCss.styles(root), seed);
-      PublishedCss.redactTree(root, variables);
-      if (!variables.isEmpty()) {
+      if (protectedPaths.isEmpty() && input.path("publicationSchema").asInt() < 2) {
+        // One-time repair of old flattened snapshots: their removed target context
+        // cannot be reconstructed. Never apply this legacy policy to new publications.
+        Set<String> seed = new HashSet<>();
+        for (JsonNode name : input.path("redactedCssVariables")) seed.add(name.asText());
+        var variables = PublishedCss.protectedVariables(PublishedCss.styles(root), seed);
+        PublishedCss.redactTree(root, variables);
         var names = screen.putArray("redactedCssVariables");
         new TreeSet<>(variables).forEach(names::add);
+      } else if (!deferCss) {
+        PublishedCss.redactTreeText(root, GeneratedContentRedaction.collect(input, protectedPaths, Map.of()));
       }
     }
     screen.put("redacted", redacted);
-    screen.put("publicationSchema", 1);
+    screen.put("publicationSchema", 2);
     if (!blockedAssets.isEmpty()) {
       ArrayNode blocked = screen.putArray("redactedAssetKeys");
       blockedAssets.forEach(blocked::add);
     }
-    return new Result(screen, PublishedEdits.project(playback, false), redacted);
+    return new Result(screen, PublishedEdits.project(playback, false), redacted, input, Set.copyOf(protectedPaths));
   }
 
   private static void index(ObjectNode root, String path, Map<String, Target> paths, Map<String, Target> fids) {

@@ -10,11 +10,11 @@ import java.util.regex.Pattern;
 /** Removes generated content from redacted publications, including its custom-property sources. */
 public final class PublishedCss {
   private PublishedCss() {}
-  private record Declaration(int start, int end, String name, String value) {}
+  record Declaration(int start, int end, String name, String value, String selector) {}
   private static final Pattern ESCAPE = Pattern.compile("\\\\([0-9a-fA-F]{1,6})(?:\\r\\n|[\\t\\n\\r\\f ])?|\\\\([^\\n\\r\\f])");
   private static final Pattern STRING_OR_COMMENT = Pattern.compile("(?s)\"(?:\\\\.|[^\"\\\\])*+\"|'(?:\\\\.|[^'\\\\])*+'|/\\*.*?(?:\\*/|$)");
 
-  private static String decode(String value) {
+  static String decode(String value) {
     var matcher = ESCAPE.matcher(value);
     var out = new StringBuffer();
     while (matcher.find()) {
@@ -31,8 +31,10 @@ public final class PublishedCss {
 
   // A small lexical scan, not a selector parser: quoted semicolons, comments and
   // function arguments cannot terminate a declaration. Selectors remain untouched.
-  private static List<Declaration> declarations(String css) {
+  static List<Declaration> declarations(String css) {
     List<Declaration> result = new ArrayList<>();
+    var selectors = new ArrayDeque<String>();
+    selectors.push("");
     int start = 0, colon = -1, depth = 0;
     char quote = 0;
     for (int i = 0; i <= css.length(); i++) {
@@ -51,8 +53,15 @@ public final class PublishedCss {
       if (c == '{' || c == '}' || c == ';') {
         if (c != '{' && colon >= start) {
           String name = decode(css.substring(start, colon).replaceAll("(?s)/\\*.*?\\*/", "").trim());
-          result.add(new Declaration(start, i, name, css.substring(colon + 1, i)));
+          result.add(new Declaration(start, i, name, css.substring(colon + 1, i), selectors.peek()));
         }
+        if (c == '{') {
+          String selector = css.substring(start, i).replaceAll("(?s)/\\*.*?\\*/", "").trim();
+          if (selector.startsWith("@")) selector = selectors.peek();
+          else if (!selectors.peek().isEmpty()) selector = selector.contains("&")
+            ? selector.replace("&", selectors.peek()) : selectors.peek() + " " + selector;
+          selectors.push(selector);
+        } else if (c == '}' && selectors.size() > 1) selectors.pop();
         start = i + 1; colon = -1;
       }
     }
@@ -106,6 +115,43 @@ public final class PublishedCss {
 
   public static void redactTree(JsonNode tree, Set<String> variables) {
     visit(tree, (css, setter) -> setter.accept(redact(css, variables)));
+  }
+
+  /** Selective live-publication cleanup. Sensitive values never become public policy metadata. */
+  public static String redactText(String css, Set<String> sensitive) {
+    var tokens = STRING_OR_COMMENT.matcher(css);
+    var out = new StringBuffer();
+    while (tokens.find()) {
+      String token = tokens.group();
+      String replacement = token.startsWith("/*") ? " "
+        : sensitive.contains(decode(token.substring(1, token.length() - 1))) ? "\"\"" : token;
+      tokens.appendReplacement(out, java.util.regex.Matcher.quoteReplacement(replacement));
+    }
+    tokens.appendTail(out);
+    return out.toString();
+  }
+
+  static Set<String> strings(String value) {
+    Set<String> strings = new HashSet<>();
+    var tokens = STRING_OR_COMMENT.matcher(value);
+    while (tokens.find()) if (!tokens.group().startsWith("/*")) {
+      String text = decode(tokens.group().substring(1, tokens.group().length() - 1));
+      if (!text.isEmpty()) strings.add(text);
+    }
+    return strings;
+  }
+
+  static Set<String> references(String value) {
+    // A quoted label such as "var(--example)" is text, not a variable dependency.
+    String unquoted = STRING_OR_COMMENT.matcher(value).replaceAll(" ");
+    var matcher = Pattern.compile("(?i:var)\\s*\\(\\s*(--[^\\s,)]+)").matcher(decode(unquoted));
+    Set<String> names = new LinkedHashSet<>();
+    while (matcher.find()) names.add(matcher.group(1));
+    return names;
+  }
+
+  public static void redactTreeText(JsonNode tree, Set<String> sensitive) {
+    visit(tree, (css, setter) -> setter.accept(redactText(css, sensitive)));
   }
 
   private static void visit(JsonNode node, java.util.function.BiConsumer<String, java.util.function.Consumer<String>> consumer) {

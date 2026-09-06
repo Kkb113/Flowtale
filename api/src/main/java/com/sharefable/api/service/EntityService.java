@@ -589,7 +589,7 @@ public class EntityService extends ServiceBase {
       Map<Long, PublishedScreen.Result> compiledScreens = new HashMap<>();
       Set<String> blockedAssets = new HashSet<>();
       for (Screen screen : screens) if (screen.getType() != ScreenType.Img) {
-        var compiled = PublishedScreen.compile(objectMapper.readTree(s3Service.getObjectContent(s3Config.getQualifiedPathFor(
+        var compiled = PublishedScreen.prepare(objectMapper.readTree(s3Service.getObjectContent(s3Config.getQualifiedPathFor(
           S3Config.AssetType.Screen, screen.getAssetPrefixHash(), "index.json"))),
           objectMapper.readTree(s3Service.getObjectContent(s3Config.getQualifiedPathFor(
             S3Config.AssetType.Screen, screen.getAssetPrefixHash(), "edits.json"))), globalEdits);
@@ -598,17 +598,12 @@ public class EntityService extends ServiceBase {
       }
       List<Callable<AssetFilePath>> tourInfoCopier = new ArrayList<>();
       boolean redactCss = compiledScreens.values().stream().anyMatch(PublishedScreen.Result::redacted);
-      Set<String> cssVariables = new HashSet<>();
-      for (var compiled : compiledScreens.values()) {
-        for (var name : compiled.screen().path("redactedCssVariables")) cssVariables.add(name.asText());
-      }
-      if (redactCss) cssVariables = proxyDelivery.protectedCssVariables(
-        compiledScreens.values().stream().map(value -> (com.fasterxml.jackson.databind.JsonNode) value.screen()).toList(),
-        demoEntity.getBelongsToOrg(), blockedAssets, cssVariables);
+      Set<String> sensitiveCssText = redactCss
+        ? proxyDelivery.protectedCssText(compiledScreens.values(), demoEntity.getBelongsToOrg(), blockedAssets) : Set.of();
       var publicTour = proxyDelivery.publish(objectMapper.readTree(s3Service.getObjectContent(assetFilePaths.getLeft())),
-        demoEntity.getBelongsToOrg(), demoEntity.getAssetPrefixHash(), nextVersion, blockedAssets, redactCss, cssVariables);
+        demoEntity.getBelongsToOrg(), demoEntity.getAssetPrefixHash(), nextVersion, blockedAssets, redactCss, sensitiveCssText);
       var publicLoader = proxyDelivery.publish(objectMapper.readTree(s3Service.getObjectContent(assetFilePaths.getMiddle())),
-        demoEntity.getBelongsToOrg(), demoEntity.getAssetPrefixHash(), nextVersion, blockedAssets, redactCss, cssVariables);
+        demoEntity.getBelongsToOrg(), demoEntity.getAssetPrefixHash(), nextVersion, blockedAssets, redactCss, sensitiveCssText);
       Callable<AssetFilePath> tourDataCopier = () -> s3Service.upload(toTourDataFilePath, objectMapper.writeValueAsBytes(publicTour), Map.of(
         HttpHeaders.CONTENT_TYPE, "application/json",
         HttpHeaders.CACHE_CONTROL, S3Config.getCachePolicyStr(S3Config.getEntityFiles().publishedDataFile().cachePolicy())
@@ -646,9 +641,10 @@ public class EntityService extends ServiceBase {
 
           var compiled = compiledScreens.get(screen.getId());
           redacted = compiled.redacted();
-          var playbackScreen = proxyDelivery.publish(compiled.screen(), demoEntity.getBelongsToOrg(), demoEntity.getAssetPrefixHash(), nextVersion, blockedAssets, redactCss, cssVariables);
-          var playbackEdits = proxyDelivery.publish(compiled.edits(), demoEntity.getBelongsToOrg(), demoEntity.getAssetPrefixHash(), nextVersion, blockedAssets, redactCss, cssVariables);
+          var playbackScreen = proxyDelivery.publish(compiled.screen(), demoEntity.getBelongsToOrg(), demoEntity.getAssetPrefixHash(), nextVersion, blockedAssets, redactCss, sensitiveCssText);
+          var playbackEdits = proxyDelivery.publish(compiled.edits(), demoEntity.getBelongsToOrg(), demoEntity.getAssetPrefixHash(), nextVersion, blockedAssets, redactCss, sensitiveCssText);
           tourInfoCopier.add(() -> s3Service.upload(publishedDocument, objectMapper.writeValueAsBytes(playbackScreen), Map.of(
+            "fable-publication-schema", "2",
             HttpHeaders.CONTENT_TYPE, "application/json",
             HttpHeaders.CACHE_CONTROL, S3Config.getCachePolicyStr(S3Config.DATA_FILE_CACHE_POLICY.Cache))));
           Callable<AssetFilePath> screenEditCopier = () -> s3Service.upload(toScreenEditFilePath,
