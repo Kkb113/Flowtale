@@ -54,4 +54,11 @@ class LocalDevelopmentTest {
       "jdbc:mysql://db/database", "jdbc:postgresql://pg-analytics/database",
       "http://storage:8333", "https://sqs.amazonaws.com", "http://localhost:3000"));
   }
+
+  @Test void manualWorkspaceHasAnIdentitySeparateFromAutomatedTests() {
+    var decoder = new LocalJwtDecoder(config(true, "jdbc:mysql://db/database", "http://localhost:3000", "local"));
+    var manual = decoder.decode("fable-local-workspace-development-token-v1");
+    assertEquals("local|workspace", manual.getSubject());
+    assertNotEquals(decoder.decode("fable-local-user-a-development-token-v1").getSubject(), manual.getSubject());
+  }
 }

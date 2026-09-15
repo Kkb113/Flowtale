@@ -1,11 +1,12 @@
 import React, { useMemo } from 'react';
 import { Auth0Context, Auth0ContextInterface, initialContext } from '@auth0/auth0-react';
-import { Button, Alert, Space } from 'antd';
+import { Button, Space } from 'antd';
+import FableLogo from '../../assets/fableLogo.svg';
 import { isLocalDevelopment } from '../../local-development';
 import { FABLE_LOCAL_STORAGE_ORG_ID_KEY } from '../../constants';
 
 const ACCOUNT_KEY = 'fable/local-fixture-account';
-const ACCOUNTS = ['user-a', 'user-b'] as const;
+const ACCOUNTS = ['workspace', 'user-a', 'user-b'] as const;
 
 export function LocalAuthProvider({ children }: { children: React.ReactNode }): JSX.Element {
   if (!isLocalDevelopment) throw new Error('Local authentication is disabled');
@@ -30,7 +31,6 @@ export function LocalAuthProvider({ children }: { children: React.ReactNode }): 
   }), [account, authenticated, token]);
   return (
     <Auth0Context.Provider value={context}>
-      <Alert type="info" banner message="Local development · Fixture accounts and entitlements · Billing is disabled" />
       {children}
     </Auth0Context.Provider>
   );
@@ -38,6 +38,7 @@ export function LocalAuthProvider({ children }: { children: React.ReactNode }): 
 
 export function LocalLogin(): JSX.Element {
   if (!isLocalDevelopment) throw new Error('Local authentication is disabled');
+  const testing = new URLSearchParams(window.location.search).get('testing') === '1';
   const select = (account: typeof ACCOUNTS[number]): void => {
     sessionStorage.setItem(ACCOUNT_KEY, account);
     localStorage.removeItem(FABLE_LOCAL_STORAGE_ORG_ID_KEY);
@@ -45,10 +46,13 @@ export function LocalLogin(): JSX.Element {
     window.location.replace(invitation ? `/join/org?ic=${encodeURIComponent(invitation)}` : '/demos');
   };
   return (
-    <Space direction="vertical" style={{ padding: 32 }}>
-      <h1>Choose a local fixture account</h1>
-      <p>These accounts access only the local development databases.</p>
-      {ACCOUNTS.map(account => <Button key={account} onClick={() => select(account)}>{account}@fable.local</Button>)}
+    <Space direction="vertical" align="center" style={{ display: 'flex', padding: 64, gap: 24 }}>
+      <img src={FableLogo} alt="Fable" style={{ width: 140, background: '#16023e', padding: 16, borderRadius: 12 }} />
+      <h1>Welcome to Fable</h1>
+      <Button type="primary" size="large" onClick={() => select('workspace')}>Continue to Fable</Button>
+      {testing && ACCOUNTS.filter(account => account !== 'workspace').map(account => (
+        <Button key={account} onClick={() => select(account)}>{account}@fable.local</Button>
+      ))}
     </Space>
   );
 }

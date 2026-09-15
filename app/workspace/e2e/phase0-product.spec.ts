@@ -13,10 +13,10 @@ test('local login opens real onboarding without an external identity provider', 
       await route.abort();
     } else await route.continue();
   });
-  await page.goto('/login');
+  await page.goto('/login?testing=1');
   await page.getByRole('button', { name: 'user-a@fable.local', exact: true }).click();
   await expect(page).toHaveURL(/welcome|demos|select-org/);
-  await expect(page.getByText('Fixture accounts and entitlements', { exact: false })).toBeVisible();
+  await expect(page.getByText('Fixture accounts and entitlements', { exact: false })).toHaveCount(0);
   await expect(page.getByAltText('fable loader')).toHaveCount(0, { timeout: 20000 });
   await expect(page.getByText("Let's get your account", { exact: false })).toBeVisible();
   await page.screenshot({ path: 'test-results/phase0-local-onboarding.png', fullPage: true });
@@ -33,7 +33,7 @@ test('an identity service failure offers retry and recovers through the real API
       body: JSON.stringify({ message: 'Identity is temporarily unavailable' }) });
     else await route.continue();
   });
-  await page.goto('/login');
+  await page.goto('/login?testing=1');
   await page.getByRole('button', { name: 'user-a@fable.local', exact: true }).click();
   await expect(page.getByRole('alert').filter({ hasText: 'Your account could not be loaded' })).toBeVisible();
   unavailable = false;
@@ -54,7 +54,7 @@ test('workspace setup survives a plan outage without creating a second workspace
     if (unavailable) await route.fulfill({ status: 503, contentType: 'application/json', body: '{}' });
     else await route.continue();
   });
-  await page.goto('/login');
+  await page.goto('/login?testing=1');
   await page.getByRole('button', { name: 'user-a@fable.local', exact: true }).click();
   await expect(page.getByText("Let's get your account", { exact: false })).toBeVisible();
   const workspace = page.getByRole('button', { name: 'Open Phase 0 browser workspace', exact: true });

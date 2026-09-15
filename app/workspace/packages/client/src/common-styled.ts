@@ -2,6 +2,8 @@ import styled from 'styled-components';
 import { Modal, Checkbox, Input, ColorPicker as AntColorPicker, Button, Select, Radio, Collapse, Popover, Segmented } from 'antd';
 import { AnnotationButtonSize } from '@fable/common/dist/types';
 import { getColorContrast } from './utils';
+import ImageWithFallback from './component/image-with-fallback';
+import DefaultAvatar from './assets/onboarding/placeholder-picture.svg';
 
 export const ColCon = styled.div`
   display: flex;
@@ -219,7 +221,9 @@ export const PopoverMenuItem = styled.div<{ nonit?: boolean }>`
   }
 `;
 
-export const Avatar = styled.img<{ sl?: boolean, glow?: boolean }>`
+export const Avatar = styled(ImageWithFallback).withConfig({
+  shouldForwardProp: prop => !['sl', 'glow'].includes(prop),
+}).attrs({ fallbackSrc: DefaultAvatar })<{ sl?: boolean, glow?: boolean }>`
   width: ${props => (props.sl ? 1.75 : 1)}rem;
   height: ${props => (props.sl ? 1.75 : 1)}rem;
   border-radius: 50%;

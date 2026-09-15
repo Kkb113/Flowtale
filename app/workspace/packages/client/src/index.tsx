@@ -1,6 +1,7 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 import './index.css';
+import './product-fonts';
 import 'animate.css/animate.min.css';
 import { Provider } from 'react-redux';
 import { ThemeProvider } from 'styled-components';
@@ -29,21 +30,10 @@ function addReditusTrackingScript(): void {
   document.head.appendChild(script);
 }
 
-function addProductFonts(): void {
-  if (document.getElementById('fable-product-fonts')) return;
-  const link = document.createElement('link');
-  link.id = 'fable-product-fonts';
-  link.rel = 'stylesheet';
-  const weights = 'ital,wght@0,100;0,200;0,300;0,400;0,500;0,600;0,700;1,100;1,200;1,300;1,400;1,500;1,600;1,700';
-  link.href = `https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:${weights}&family=IBM+Plex+Sans:${weights}&display=swap`;
-  document.head.appendChild(link);
-}
-
 const isPhase0Characterization = process.env.NODE_ENV !== 'production'
   && ['/__phase0/editor', '/__phase0/renderer'].includes(document.location.pathname);
 
 if (document.location.pathname !== '/aboutblank' && !isPhase0Characterization && !isLocalDevelopment) {
-  addProductFonts();
   console.log(`Version: ${packageJSON.version}`);
 
   try {
@@ -380,7 +370,7 @@ const router = createBrowserRouter([
             path: 'leads',
             async lazy() {
               const AggregateAnalytics = await import('./container/aggregate-analytics').then(module => module.default);
-              return { Component: () => <AggregateAnalytics title="Creating demo hub | Fable" /> };
+              return { Component: () => <AggregateAnalytics title="Leads | Fable" /> };
             },
           },
           {

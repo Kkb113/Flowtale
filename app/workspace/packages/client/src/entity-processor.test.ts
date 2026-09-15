@@ -1,4 +1,4 @@
-import { groupScreens, processRawScreenData, P_RespScreen } from './entity-processor';
+import { groupScreens, processRawScreenData, P_RespScreen, thumbnailUrl } from './entity-processor';
 
 jest.mock('./utils', () => ({ getDisplayableTime: () => 'today', getDefaultThumbnailHash: () => 'default.png' }));
 jest.mock('./component/annotation-rich-text-editor/utils/lead-form-node-utils', () => ({}));
@@ -8,6 +8,13 @@ jest.mock('nanoid', () => ({ nanoid: () => 'unused-in-grouping' }));
 const screen = (id: number, parentScreenId: number, updatedAt = id): P_RespScreen => ({
   id, parentScreenId, isRootScreen: parentScreenId === 0, related: [], updatedAt: new Date(updatedAt),
 } as unknown as P_RespScreen);
+
+it('serves missing/default thumbnails from bundled assets and preserves authorized derivatives', () => {
+  expect(thumbnailUrl(undefined, 'https://assets.example/').origin).toBe(window.location.origin);
+  expect(thumbnailUrl('ph/placeholder1.png', 'https://assets.example/').origin).toBe(window.location.origin);
+  const derivative = 'data:image/jpeg;base64,YQ==';
+  expect(thumbnailUrl('private.jpg', 'https://assets.example/', undefined, derivative).href).toBe(derivative);
+});
 
 it('isolates published screen documents by demo and version while retaining portable export paths', () => {
   const source = { ...screen(1, 0),

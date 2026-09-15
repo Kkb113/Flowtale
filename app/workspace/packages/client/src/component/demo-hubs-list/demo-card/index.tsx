@@ -2,6 +2,8 @@ import React, { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Tooltip } from 'antd';
 import { CaretRightOutlined, EditOutlined, ShareAltOutlined } from '@ant-design/icons';
+import DefaultThumbnail from '../../../assets/illustration-3.svg';
+import ImageWithFallback from '../../image-with-fallback';
 import * as Tags from '../styled';
 import DemoOptionsMenu from '../card-menu';
 import { IDemoHubConfig, P_RespDemoHub, RenameDemoHubFn } from '../../../types';
@@ -32,7 +34,7 @@ function DemoCard(props : Props) : JSX.Element {
   return (
     <Tags.Demo key={props.demoHub.rid}>
       <div className="image-container">
-        <img src={props.demoHub.thumbnailUri.href} alt="demo thumbnail" />
+        <ImageWithFallback src={props.demoHub.thumbnailUri.href} fallbackSrc={DefaultThumbnail} alt="demo thumbnail" />
         <div className="option-overlay">
           <Link
             to={`/hub/${props.demoHub.rid}`}

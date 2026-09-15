@@ -817,7 +817,6 @@ class Tours extends React.PureComponent<IProps, IOwnStateProps> {
               <SidePanel
                 selected="tours"
                 subs={this.props.subs}
-                compact={this.props.userCreatedTours.length === 0}
               />
             </GTags.SidePanelCon>
           )}

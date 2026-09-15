@@ -10,7 +10,8 @@ import java.util.Map;
 public final class LocalJwtDecoder implements JwtDecoder {
   private static final Map<String, String> ACCOUNTS = Map.of(
     "fable-local-user-a-development-token-v1", "user-a",
-    "fable-local-user-b-development-token-v1", "user-b"
+    "fable-local-user-b-development-token-v1", "user-b",
+    "fable-local-workspace-development-token-v1", "workspace"
   );
 
   public LocalJwtDecoder(LocalDevelopmentConfig config) {
@@ -26,7 +27,7 @@ public final class LocalJwtDecoder implements JwtDecoder {
       .subject("local|" + account).issuedAt(now).expiresAt(now.plusSeconds(3600))
       .claim("email_verified", true)
       .claim("https://identity.sharefable.com/user", Map.of(
-        "email", account + "@fable.local", "picture", "", "givenName", "Local", "familyName", account
+        "email", account + "@fable.local", "picture", "", "givenName", account.equals("workspace") ? "Fable" : "Local", "familyName", account.equals("workspace") ? "" : account
       )).build();
   }
 }

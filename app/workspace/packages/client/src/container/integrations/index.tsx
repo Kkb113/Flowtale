@@ -15,7 +15,7 @@ import {
   RespUser
 } from '@fable/common/dist/api-contract';
 import api from '@fable/common/dist/api';
-import raiseDeferredError from '@fable/common/dist/deferred-error';
+import { captureException } from '@sentry/react';
 import { Tabs } from 'antd';
 import { CheckCircleOutlined, DeleteOutlined, LoadingOutlined, SmallDashOutlined } from '@ant-design/icons';
 import { None } from 'framer-motion';
@@ -126,7 +126,7 @@ class Integrations extends React.PureComponent<IProps, IOwnStateProps> {
       });
       return resp.data;
     } catch (e) {
-      raiseDeferredError(e as Error);
+      captureException(e);
       this.setState({ hasIntegrationLoadingErr: true });
       return [];
     }
@@ -140,7 +140,7 @@ class Integrations extends React.PureComponent<IProps, IOwnStateProps> {
       const sessionToken = resp.data.token;
       this.setState({ cobaltSessionToken: sessionToken });
     } catch (e) {
-      raiseDeferredError(e as Error);
+      captureException(e);
       this.setState({ hasIntegrationLoadingErr: true });
     }
   };
@@ -157,7 +157,7 @@ class Integrations extends React.PureComponent<IProps, IOwnStateProps> {
       this.setState({ listOfLinkedApps: data });
       return data;
     } catch (e) {
-      raiseDeferredError(e as Error);
+      captureException(e);
       this.setState({ hasIntegrationLoadingErr: true,
         listOfLinkedApps: (await this.getPlatformIntegrations())
           .sort((m, n) => IntegrationOrder.indexOf(m.type) - IntegrationOrder.indexOf(n.type)) });
@@ -373,7 +373,7 @@ class Integrations extends React.PureComponent<IProps, IOwnStateProps> {
                     </GTags.OurLink>.
                   </div>
                   {this.state.hasIntegrationLoadingErr && (
-                  <div className="err-msg">
+                  <div className="err-msg" role="alert">
                     <h3>Couldn't load some integrations</h3>
                     <p>
                       This might happen when you don't have access to integrations.

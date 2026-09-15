@@ -1800,6 +1800,16 @@
   resolved "https://registry.yarnpkg.com/@floating-ui/utils/-/utils-0.2.1.tgz#16308cea045f0fc777b6ff20a9f25474dd8293d2"
   integrity sha512-9TANp6GPoMtYzQdt54kfAyMmz1+osLlXdg2ENroU7zzrtflTLrrC/lgrIfaSe+Wu0b89GKccT7vxXA0MoAIO+Q==
 
+"@fontsource/ibm-plex-mono@5.3.0":
+  version "5.3.0"
+  resolved "https://registry.yarnpkg.com/@fontsource/ibm-plex-mono/-/ibm-plex-mono-5.3.0.tgz#1879699d104602d5331e28e103f33c3b1b766b17"
+  integrity sha512-eTgnZjZEGk1QtD3ZstF+Vclo2HLAni8YMy34/DxllwZvyz1lR/1RF/xTiAquOBO7MvqBx8D2Ig2WCPMVfdZu7Q==
+
+"@fontsource/ibm-plex-sans@5.3.0":
+  version "5.3.0"
+  resolved "https://registry.yarnpkg.com/@fontsource/ibm-plex-sans/-/ibm-plex-sans-5.3.0.tgz#8099950b404e625f65e7bd833bcb84ffe6bcd40c"
+  integrity sha512-CbE4CbbEEZJX860XyUiRpsksXIQR8Rp2XDva2VO53NJox9tVNtusrysd2x5YkUEY3ErQ66W1IiiQL8/wihhw5w==
+
 "@headlessui/react@^0.0.0-dev.0ce63d8":
   version "0.0.0-dev.0ce63d8"
   resolved "https://registry.yarnpkg.com/@headlessui/react/-/react-0.0.0-dev.0ce63d8.tgz#e3ec320669adc3d380774696d7cda5f9d2b65b14"

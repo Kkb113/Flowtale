@@ -141,7 +141,7 @@ test('drafts require workspace access while published snapshots remain publicly 
       const draftRequests: string[] = [];
       viewer.on('request', req => { if (new URL(req.url()).pathname === endpoint) draftRequests.push(req.url()); });
       await viewer.goto(`http://localhost:3000${path}?staging=true`);
-      await expect(viewer.getByRole('heading', { name: 'Choose a local fixture account' })).toBeVisible();
+      await expect(viewer.getByRole('heading', { name: 'Welcome to Fable' })).toBeVisible();
       expect(draftRequests).toEqual([]);
     } finally { await anonymous.close(); }
   }

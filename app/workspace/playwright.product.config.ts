@@ -2,7 +2,7 @@ import { defineConfig, devices } from '@playwright/test';
 
 export default defineConfig({
   testDir: './e2e',
-  testMatch: /(?:phase0-(?:product|media|access|creation|capture-product|save-recovery|membership|publication|interactions)|captured-renderer)\.spec\.ts/,
+  testMatch: /(?:phase0-(?:product|presentation|media|access|creation|capture-product|save-recovery|membership|publication|interactions)|captured-renderer)\.spec\.ts/,
   fullyParallel: false,
   workers: 1,
   globalSetup: './e2e/setup-local.ts',

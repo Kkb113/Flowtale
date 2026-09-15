@@ -25,6 +25,7 @@ import { handleCaptureRequest, retainCapture, pendingCaptures } from "./capture-
 
 import { captureFrameIds } from "./capture-frames";
 import { recordingReadiness } from "./recording-readiness";
+import { recordingScreenshot } from "./recording-screenshot";
 
 sentryInit("background", version);
 
@@ -413,7 +414,7 @@ async function handleMessage(msg: MsgPayload<any>, sender: chrome.runtime.Messag
           if (!expected || expected.tabId !== sender.tab!.id) return;
           const tab = await chrome.tabs.get(sender.tab!.id!);
           if (!tab.active || tab.windowId !== sender.tab!.windowId) throw new Error("The recorded tab is no longer visible");
-          const data = await chrome.tabs.captureVisibleTab(tab.windowId, { format: "png" });
+          const data = await recordingScreenshot(tab.id!, tab.windowId);
           await chrome.storage.local.set({ [LAST_SCREENSHOT]: Date.now() });
           await addFrameDataToProcessList(tMsg.data.id, { oid: tMsg.data.id,
             frameId: 0,

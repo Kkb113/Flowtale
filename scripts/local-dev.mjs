@@ -101,7 +101,7 @@ try {
     // Mounted configuration changes do not reload an already-running nginx process.
     await run('docker', [...compose, 'restart', 'gateway']);
     await waitForProduct();
-    console.log('Local Fable is ready at http://localhost:3000/login. Choose a fixture account.');
+    console.log('Local Fable is ready at http://localhost:3000/login. Select Continue to Fable for your manual workspace.');
   }
 } catch (error) {
   console.error(error.message);

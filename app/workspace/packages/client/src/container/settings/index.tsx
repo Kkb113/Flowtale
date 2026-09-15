@@ -187,19 +187,11 @@ class Settings extends React.PureComponent<IProps, IOwnStateProps> {
   }
 
   getNoOfCustomDomain(): number {
-    if (!this.props.featureForPlan) return -1;
-    try {
-      const numberOfCustomDomainAllowed = this.props.featureForPlan.domain_for_sharing.value as string;
-      const limitStr = numberOfCustomDomainAllowed.match(/<=(\d+)/);
-      if (limitStr && limitStr[1]) {
-        const limit = +limitStr[1];
-        return Number.isFinite(limit) ? limit : -1;
-      }
-      return -1;
-    } catch (e) {
-      raiseDeferredError(e as Error);
-      return -1;
-    }
+    const configured = this.props.featureForPlan?.domain_for_sharing?.value;
+    if (typeof configured !== 'string') return -1;
+    const match = configured.match(/<=(\d+)/);
+    const limit = match ? Number(match[1]) : -1;
+    return Number.isFinite(limit) ? limit : -1;
   }
 
   showErrorMsg = (msg: string, cancelAfterMs = 7000) => {
@@ -309,7 +301,7 @@ class Settings extends React.PureComponent<IProps, IOwnStateProps> {
                                 }}
                                 >
                                   Created by
-                                  <img className="avatar" alt="avatar" src={this.state.apiKey.createdBy.avatar} />
+                                  <GTags.Avatar className="avatar" alt="avatar" src={this.state.apiKey.createdBy.avatar} />
                                   {this.state.apiKey.createdBy.firstName} {this.state.apiKey.createdBy.lastName}
                                   &nbsp;
                                   on {dateTimeFormat(new Date(this.state.apiKey.createdAt))}

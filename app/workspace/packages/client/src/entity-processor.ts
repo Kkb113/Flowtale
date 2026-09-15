@@ -46,6 +46,7 @@ import { DEFAULT_BLUE_BORDER_COLOR } from '@fable/common/dist/constants';
 import { nanoid } from 'nanoid';
 import { draftAssetUrl } from '@fable/common/dist/draft-assets';
 import Handlebars from 'handlebars';
+import DefaultThumbnail from './assets/illustration-3.svg';
 import {
   AllEdits,
   EditItem,
@@ -147,6 +148,7 @@ function getFileUris(
 export function thumbnailUrl(thumbnail: string | undefined, commonPath: string, baseUrl?: string, data?: string): URL {
   if (thumbnail && /^data:image\/(?:png|jpeg);base64,[A-Za-z0-9+/=]+$/.test(thumbnail)) return new URL(thumbnail);
   if (data && /^data:image\/jpeg;base64,[A-Za-z0-9+/=]+$/.test(data)) return new URL(data);
+  if (!thumbnail || thumbnail === getDefaultThumbnailHash()) return new URL(DefaultThumbnail, window.location.href);
   if (thumbnail && /^https?:\/\//.test(thumbnail)) return new URL(thumbnail);
   return new URL(`${commonPath}${thumbnail || getDefaultThumbnailHash()}`, baseUrl);
 }

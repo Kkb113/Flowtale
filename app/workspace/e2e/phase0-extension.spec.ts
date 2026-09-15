@@ -3,11 +3,13 @@ import { resolve } from 'node:path';
 
 // Uses the real packaged extension, its service worker, content scripts and browser IndexedDB.
 // The pages are deterministic HTML fixtures; no customer site or external service is contacted.
-for (const interruption of ['none', 'worker-restart', 'tab-close', 'no-click', 'missing-frame', 'failed-retain', 'client-reload', 'nested-frames'] as const) {
+for (const interruption of ['none', 'worker-restart', 'tab-close', 'no-click', 'readback', 'missing-frame', 'failed-retain', 'client-reload', 'nested-frames'] as const) {
 test(`a real recording survives ${interruption} and is acknowledged only after durable client storage`, async () => {
   const extension = resolve(process.env.FABLE_EXTENSION_PATH || 'packages/ext-tour/build/pinned');
   const context = await chromium.launchPersistentContext('', { channel: 'chromium', headless: true,
     args: [`--disable-extensions-except=${extension}`, `--load-extension=${extension}`] });
+  const browserErrors: string[] = [];
+  context.on('console', message => { if (message.type() === 'error') browserErrors.push(message.text()); });
   try {
     await context.route('http://**/*', route => {
       const url = new URL(route.request().url());
@@ -30,6 +32,20 @@ test(`a real recording survives ${interruption} and is acknowledged only after d
     await source.goto('http://capture.fable.test/start');
     const popup = await context.newPage();
     await popup.goto(`chrome-extension://${id}/popup.html`);
+    if (interruption === 'readback') {
+      await worker.evaluate(() => {
+        const scope = globalThis as any;
+        const capture = scope.chrome.tabs.captureVisibleTab.bind(scope.chrome.tabs);
+        scope.injectedReadbackFailures = 0;
+        scope.chrome.tabs.captureVisibleTab = async (...args: any[]) => {
+          if (scope.injectedReadbackFailures === 0) {
+            scope.injectedReadbackFailures++;
+            throw new Error('Failed to capture tab: image readback failed');
+          }
+          return capture(...args);
+        };
+      });
+    }
     await popup.evaluate(async () => {
       const chrome = (window as any).chrome;
       const tabs = await chrome.tabs.query({ url: 'http://capture.fable.test/*' });
@@ -40,7 +56,7 @@ test(`a real recording survives ${interruption} and is acknowledged only after d
       const chrome = (globalThis as any).chrome;
       return (await chrome.storage.local.get('app_state_recording')).app_state_recording;
     })).toBe(2);
-    if (interruption !== 'no-click') {
+    if (interruption !== 'no-click' && interruption !== 'readback') {
     await source.getByRole('button', { name: 'Update card' }).click();
     await expect.poll(() => worker.evaluate(async () => {
       const stored = await (globalThis as any).chrome.storage.local.get(null);
@@ -128,6 +144,9 @@ test(`a real recording survives ${interruption} and is acknowledged only after d
             .map(([key, value]) => [key, Array.isArray(value) ? value.map(part => ({ type: part.type, frameId: part.frameId, size: JSON.stringify(part.data).length })) : value]));
         });
         console.log('Fixture recording metadata:', JSON.stringify(diagnostic));
+        console.log('Recording browser errors:', browserErrors);
+        console.log('Recording tabs:', await worker.evaluate(async () => (await (globalThis as any).chrome.tabs.query({}))
+          .map((tab: any) => ({ id: tab.id, active: tab.active, url: tab.url }))));
         await test.info().attach('recording-state', { body: JSON.stringify(diagnostic, null, 2), contentType: 'application/json' });
         throw error;
       });
@@ -145,6 +164,9 @@ test(`a real recording survives ${interruption} and is acknowledged only after d
     }));
     expect(capture.captureSessionId).toBe(new URL(client.url()).searchParams.get('capture'));
     expect(capture.cookies).toBe('[]');
+    if (interruption === 'readback') {
+      expect(await worker.evaluate(() => (globalThis as any).injectedReadbackFailures)).toBe(1);
+    }
     if (interruption === 'nested-frames') {
       for (const screen of JSON.parse(capture.screensData)) {
         expect(screen.filter((part: any) => part.type === 'serdom')).toHaveLength(3);
@@ -153,7 +175,7 @@ test(`a real recording survives ${interruption} and is acknowledged only after d
       expect(capture.screensData).toContain('Nested original origin');
       await expect(source.locator('#original-handler')).toHaveAttribute('data-loaded', 'yes');
     }
-    expect(JSON.parse(capture.screensData).length).toBe(['tab-close', 'no-click', 'missing-frame'].includes(interruption) ? 1 : interruption === 'worker-restart' ? 3 : 2);
+    expect(JSON.parse(capture.screensData).length).toBe(['tab-close', 'no-click', 'readback', 'missing-frame'].includes(interruption) ? 1 : interruption === 'worker-restart' ? 3 : 2);
     expect(capture.screensData).toContain(interruption === 'missing-frame' ? 'Updated card' : 'Capture fixture');
     if (interruption === 'client-reload') {
       await client.reload();
@@ -164,7 +186,7 @@ test(`a real recording survives ${interruption} and is acknowledged only after d
     ).filter(key => key.startsWith('fable/pending-capture/')).length)).toBe(0);
     if (!source.isClosed()) {
       await expect(source.locator('#fable-0-cm-presence')).not.toBeAttached();
-      await expect(source.locator('h1')).toHaveText(interruption === 'no-click' ? 'Capture fixture' : 'Updated card');
+      await expect(source.locator('h1')).toHaveText(['no-click', 'readback'].includes(interruption) ? 'Capture fixture' : 'Updated card');
       await source.getByRole('button', { name: 'Update card' }).click();
       expect(await worker.evaluate(async () => Object.keys(await (globalThis as any).chrome.storage.local.get(null))
         .filter(key => key.startsWith('frames_to_process/')).length)).toBe(0);

@@ -171,7 +171,7 @@ class UserManagementAndSubscription extends React.PureComponent<IProps, IOwnStat
                     {this.props.users.map((user) => (
                       <Tags.UserCardCon key={user.id} active={user.active}>
                         <Tags.Avatar>
-                          <img src={user.avatar} alt={`${user.firstName}'s dp`} />
+                          <GTags.Avatar src={user.avatar} alt={`${user.firstName}'s profile`} />
                         </Tags.Avatar>
                         <Tags.CardDataCon>
                           <Tags.DisplayName>

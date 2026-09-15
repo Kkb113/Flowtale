@@ -8,7 +8,7 @@ import { getDisplayableTime } from '@fable/common/dist/utils';
 import React, { useEffect, useRef, useState } from 'react';
 import { Alert } from 'antd';
 import { AMPLITUDE_EVENTS } from '../../amplitude/events';
-import { OurLink } from '../../common-styled';
+import { Avatar, OurLink } from '../../common-styled';
 import { OnboardingSteps } from '../../container/user-onboarding';
 import Button from '../button';
 import Input from '../input';
@@ -174,7 +174,7 @@ export default function OrgCreate(props: Props): JSX.Element {
                     }}
                   >
                     Created by&nbsp;&nbsp;
-                    <img
+                    <Avatar
                       src={org.createdBy.avatar}
                       alt="avatar"
                       style={{
