@@ -32,12 +32,13 @@ import { Alert, Modal, Select, Tooltip } from 'antd';
 import { getSampleConfig } from '@fable/common/dist/utils';
 import { create_guides_router } from '@fable/common/dist/llm-fn-schema/create_guides_router';
 import { suggest_guide_theme } from '@fable/common/dist/llm-fn-schema/suggest_guide_theme';
-import { openDb, DB_NAME, OBJECT_KEY, OBJECT_KEY_VALUE, OBJECT_STORE, DBData } from '@fable/common/dist/db-utils';
+import { openDb, DB_NAME, OBJECT_KEY, OBJECT_STORE, DBData } from '@fable/common/dist/db-utils';
+import { readCapture } from '@fable/common/dist/capture-storage';
 import { addNewTourToAllTours, getAllTours, getGlobalConfig, getSubscriptionOrCheckoutNew } from '../../action/creator';
 import { P_RespSubscription, P_RespTour } from '../../entity-processor';
 import { TState } from '../../reducer';
 import { withRouter, WithRouterProps } from '../../router-hoc';
-import { deleteCompletedCapture, saveDbDataToAws, getDataFromDb } from './db-utils';
+import { deleteCompletedCapture, saveDbDataToAws } from './db-utils';
 import {
   AiDataMap,
   AiItem,
@@ -294,7 +295,7 @@ class CreateTour extends React.PureComponent<IProps, IOwnStateProps> {
   async initDbOperations(): Promise<void> {
     this.db = await openDb(DB_NAME, OBJECT_STORE, 1, OBJECT_KEY);
     if (!this.mounted) { this.db.close(); return; }
-    const dbData = await getDataFromDb(this.db, OBJECT_STORE, OBJECT_KEY_VALUE) as DBData;
+    const dbData = await readCapture(this.db, new URLSearchParams(window.location.search).get('capture'));
     if (dbData) {
       this.data = dbData;
 
@@ -306,7 +307,7 @@ class CreateTour extends React.PureComponent<IProps, IOwnStateProps> {
       const anonymousDemoId = dbData.captureSessionId || fingerprint;
       if (!navigator.locks) throw new Error('Use a browser with Web Locks support to safely create this demo.');
       await new Promise<void>((resolve, reject) => {
-        navigator.locks.request('fable-create-recording', { ifAvailable: true }, async lock => {
+        navigator.locks.request(`fable-create-recording/${anonymousDemoId}`, { ifAvailable: true }, async lock => {
           if (!lock) { reject(new Error('This recording is being processed in another tab. Close that tab, then retry.')); return; }
           await new Promise<void>(release => { this.releaseCreationLock = release; resolve(); });
         }).catch(reject);

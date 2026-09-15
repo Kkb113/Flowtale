@@ -17,10 +17,6 @@ export async function deleteCompletedCapture(db: IDBDatabase, storeName: string,
   });
 }
 
-export function getDataFromDb(db: IDBDatabase, storeName: string, key: string) {
-  return runDbRequest(db, storeName, 'readonly', store => store.get(key));
-}
-
 export const saveDbDataToAws = async (dbData: DBData, anonDemoId: string): Promise<void> => {
   const nameOfSerdomFile = 'index.json';
   const contentType = 'application/json';

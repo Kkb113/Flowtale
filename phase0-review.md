@@ -1,5 +1,7 @@
 # Phase 0 review and verification ledger
 
+Current alignment review and recorder follow-up: [Foundation review](foundation-review.md). It supersedes earlier recorder completion assumptions while retaining the core scope and deployment boundaries below.
+
 Status: **Phase 0 core implementation accepted — September 6, 2026**. All final local validation gates pass. `implementation.md` remains the scope authority; production rollout requires the documented storage/CDN cutover. Billing, membership expansion and secondary product qualification remain deferred by user direction.
 
 ## Readiness review corrections (September 15)

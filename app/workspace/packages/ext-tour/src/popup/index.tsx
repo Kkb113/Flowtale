@@ -212,7 +212,7 @@ class Root extends Component<Props, State> {
                 className="btn-secondary"
                 onClick={() => this.command(Msg.OPEN_CAPTURE, { id: capture.id })}
               >
-                Resume {capture.screenCount} screen recording ({new Date(capture.createdAt).toLocaleString()})
+                Open {capture.screenCount}-screen demo in Fable
               </button>
             ))}
             <div className="header-con">
@@ -354,13 +354,25 @@ class Root extends Component<Props, State> {
                     {
                       this.state.recordingStatus === RecordingStatus.Stopping && (
                         <div aria-live="polite">
-                          <p>{this.state.recovery.complete} of {this.state.recovery.total} screens are complete.</p>
-                          <p>You can leave this window and reopen it. Unfinished data stays in this browser.</p>
-                          <button type="button" className="btn-primary" onClick={() => this.command(Msg.RESET_STATE)}>Check completion</button>
-                          {this.state.recovery.complete > 0 && this.state.recovery.complete < this.state.recovery.total && (
-                            <button type="button" className="btn-secondary" onClick={this.recoverComplete}>Keep complete screens</button>
+                          {!this.state.recovery.message ? (
+                            <><p>Opening your demo in Fable...</p><Loader /></>
+                          ) : (
+                            <>
+                              <p>{this.state.recovery.complete} of {this.state.recovery.total} screens are complete.</p>
+                              <p>You can leave this window and reopen it. Unfinished data stays in this browser.</p>
+                              <button type="button" className="btn-primary" onClick={() => this.command(Msg.RESET_STATE)}>
+                                Check completion
+                              </button>
+                              {this.state.recovery.complete > 0 && this.state.recovery.complete < this.state.recovery.total && (
+                                <button type="button" className="btn-secondary" onClick={this.recoverComplete}>
+                                  Keep complete screens
+                                </button>
+                              )}
+                              <button type="button" className="btn-secondary" onClick={this.deleteRecording}>
+                                Discard recording
+                              </button>
+                            </>
                           )}
-                          <button type="button" className="btn-secondary" onClick={this.deleteRecording}>Discard recording</button>
                         </div>
                       )
                     }

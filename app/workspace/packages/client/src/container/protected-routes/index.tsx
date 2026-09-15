@@ -29,7 +29,7 @@ interface IOwnStateProps { }
 // If we add the provider on the upstream component the Auth0Provider executes code that throws error.
 // Since during the /p or /form route does not need any auth we don't even initialize the auth0 for those
 
-class ProtectedRoutes extends React.PureComponent<IProps, IOwnStateProps> {
+export class ProtectedRoutes extends React.PureComponent<IProps, IOwnStateProps> {
   render(): JSX.Element {
     const pathname = this.props.location.pathname.toLowerCase();
     const shouldResolvePrincipal = !(pathname === '/login' || pathname === '/logout');
@@ -57,6 +57,8 @@ class ProtectedRoutes extends React.PureComponent<IProps, IOwnStateProps> {
         onRedirectCallback={(appState) => {
           if (appState?.ic) {
             this.props.navigate(`/join/org?ic=${appState.ic}`, { replace: true });
+          } else if (typeof appState?.capture === 'string' && appState.capture) {
+            this.props.navigate(`/create-interactive-demo?capture=${encodeURIComponent(appState.capture)}`, { replace: true });
           } else {
             this.props.navigate('/', { replace: true });
           }

@@ -1,6 +1,6 @@
-import { openDb, DB_NAME, OBJECT_STORE, OBJECT_KEY, OBJECT_KEY_VALUE, DBData, runDbRequest } from "@fable/common/dist/db-utils";
+import { openDb, DB_NAME, OBJECT_STORE, OBJECT_KEY, OBJECT_KEY_VALUE, DBData } from "@fable/common/dist/db-utils";
 import { CaptureChunk, CaptureManifest, captureChecksum, validateCapture, validateManifest } from "@fable/common/dist/capture-transfer";
-import { commitCapture } from "@fable/common/dist/capture-storage";
+import { commitCapture, readCapture } from "@fable/common/dist/capture-storage";
 
 function status(id: string, value: string) {
   const element = document.getElementById(id) || document.createElement("div");
@@ -31,10 +31,10 @@ async function transfer() {
     const db = await openDb(DB_NAME, OBJECT_STORE, 1, OBJECT_KEY);
     let previous: DBData | undefined;
     try {
-      previous = await runDbRequest(db, OBJECT_STORE, "readonly", store => store.get(OBJECT_KEY_VALUE));
+      previous = await readCapture(db, id);
     } finally { db.close(); }
     if (previous?.captureSessionId === id) {
-      await request({ type: "fable/CAPTURE_ACK", id, checksum: await captureChecksum(JSON.stringify(previous)) });
+      await request({ type: "fable/CAPTURE_ACK", id, checksum: await captureChecksum(JSON.stringify({ ...previous, id: OBJECT_KEY_VALUE })) });
       status("version-data", "3");
       status("redirect-ready", "1");
       return;

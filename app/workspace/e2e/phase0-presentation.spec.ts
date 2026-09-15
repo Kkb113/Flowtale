@@ -8,6 +8,24 @@ test('normal login presents Fable without development accounts or banners', asyn
   await expect(page.getByText(/Fixture accounts|Phase 0|Local development/)).toHaveCount(0);
 });
 
+test('normal local sign-in and workspace survive a new recording tab', async ({ page, context }) => {
+  await page.goto('/login');
+  await page.getByRole('button', { name: 'Continue to Fable' }).click();
+  await page.getByRole('button', { name: 'Open Fable Workspace', exact: true }).click();
+  await page.waitForURL(url => url.pathname === '/demos' || url.hash === '#usecases');
+  for (let step = 0; step < 2 && new URL(page.url()).pathname === '/welcome'; step++) {
+    const hash = new URL(page.url()).hash;
+    await page.getByRole('button', { name: 'Skip', exact: true }).nth(hash === '#usecases' ? 0 : 1).click();
+    await page.waitForURL(url => url.hash !== hash);
+  }
+  await expect(page).toHaveURL(/\/demos$/);
+  const recordingTab = await context.newPage();
+  await recordingTab.goto('http://localhost:3000/demos');
+  await expect(recordingTab.getByAltText('Fable logo')).toBeVisible();
+  await expect(recordingTab).toHaveURL(/\/demos$/);
+  await expect(recordingTab.getByRole('button', { name: 'Continue to Fable' })).toHaveCount(0);
+});
+
 test('product pages load bundled fonts, avatars and hub thumbnails without broken images', async ({ page, request }) => {
   test.setTimeout(120000);
   const base = 'http://localhost:18080/v1/f';

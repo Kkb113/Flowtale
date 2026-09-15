@@ -1,7 +1,7 @@
 import { chromium, expect, test } from '@playwright/test';
 import { resolve } from 'node:path';
 
-for (const saveFailure of [null, 'http', 'logical', 'source-ack', 'tour-ack', 'copy-ack', 'final-ack', 'append-ack', 'append-conflict'] as const) {
+for (const saveFailure of [null, 'auth-callback', 'unavailable-frame', 'previous-recording', 'http', 'logical', 'source-ack', 'tour-ack', 'copy-ack', 'final-ack', 'append-ack', 'append-conflict'] as const) {
 test(saveFailure ? `capture recovery handles ${saveFailure} without losing or duplicating the recording`
   : 'a real no-click extension recording creates a manual demo through the product', async ({ request }) => {
   test.setTimeout(180000);
@@ -80,7 +80,10 @@ test(saveFailure ? `capture recovery handles ${saveFailure} without losing or du
         }
       }
       if (url.hostname === 'capture.fable.test') return route.fulfill({ contentType: 'text/html',
-        body: '<!doctype html><html><head><title>Phase 0 captured product</title></head><body><h1>Product capture fixture</h1><p>A complete no-click screen.</p></body></html>' });
+        body: '<!doctype html><html><head><title>Phase 0 captured product</title></head><body><h1>Product capture fixture</h1><p>A complete no-click screen.</p>'
+          + (saveFailure === 'unavailable-frame' ? '<iframe src="http://frame.fable.test/embed"></iframe>' : '') + '</body></html>' });
+      if (url.hostname === 'frame.fable.test') return route.fulfill({ contentType: 'text/html',
+        body: '<!doctype html><html><body><h2>Captured embedded content</h2></body></html>' });
       if (['http:', 'https:'].includes(url.protocol) && !['localhost', '127.0.0.1'].includes(url.hostname)) {
         external.push(url.origin);
         return route.abort();
@@ -103,6 +106,24 @@ test(saveFailure ? `capture recovery handles ${saveFailure} without losing or du
     await source.goto('http://capture.fable.test/product');
     const popup = await context.newPage();
     await popup.goto(`chrome-extension://${extensionId}/popup.html`);
+    if (saveFailure === 'previous-recording') {
+      const previous = await context.newPage();
+      await previous.goto('http://localhost:3000/login');
+      await previous.evaluate(() => new Promise<void>((resolveStored, reject) => {
+        const open = indexedDB.open('screensDB', 1);
+        open.onupgradeneeded = () => open.result.createObjectStore('screensDataStore', { keyPath: 'id' });
+        open.onerror = () => reject(open.error);
+        open.onsuccess = () => {
+          const db = open.result;
+          const tx = db.transaction('screensDataStore', 'readwrite');
+          tx.objectStore('screensDataStore').put({ id: '1', captureSessionId: 'older-unfinished',
+            screensData: 'older recording must remain intact', cookies: '[]', version: '3', screenStyleData: '{}' });
+          tx.oncomplete = () => { db.close(); resolveStored(); };
+          tx.onabort = () => { db.close(); reject(tx.error); };
+        };
+      }));
+      await previous.close();
+    }
     const started = await popup.evaluate(async () => {
       const chrome = (window as any).chrome;
       const [tab] = await chrome.tabs.query({ url: 'http://capture.fable.test/*' });
@@ -110,10 +131,40 @@ test(saveFailure ? `capture recovery handles ${saveFailure} without losing or du
       return chrome.runtime.sendMessage({ type: 'fable/START_RECORDING' });
     });
     expect(started).toEqual({ ok: true });
+    if (saveFailure === 'unavailable-frame') {
+      // An unavailable widget alongside a real embedded document must not block the whole demo.
+      await worker.evaluate(() => {
+        const chrome = (globalThis as any).chrome;
+        const getAllFrames = chrome.webNavigation.getAllFrames.bind(chrome.webNavigation);
+        chrome.webNavigation.getAllFrames = async (details: object) => [
+          ...await getAllFrames(details), { frameId: 999, parentFrameId: 0, url: 'https://unavailable.fable.test/widget' },
+        ];
+      });
+    }
     await popup.evaluate(() => (window as any).chrome.runtime.sendMessage({ type: 'fable/STOP_RECORDING' }));
     await expect.poll(() => context.pages().find(page => page.url().includes('/preptour?capture='))?.url(), { timeout: 30000 }).toBeTruthy();
     const client = context.pages().find(page => page.url().includes('/preptour?capture='))!;
-    await client.waitForURL('**/create-interactive-demo', { timeout: 60000 });
+    await client.waitForURL('**/create-interactive-demo?capture=*', { timeout: 60000 });
+    if (saveFailure === 'auth-callback') {
+      const capture = new URL(client.url()).searchParams.get('capture');
+      await client.goto(`http://localhost:3000/cb/auth?capture=${encodeURIComponent(capture!)}`);
+      await client.waitForURL('**/create-interactive-demo?capture=*');
+      expect(new URL(client.url()).searchParams.get('capture')).toBe(capture);
+    }
+    if (saveFailure === 'previous-recording') {
+      const older = await client.evaluate(() => new Promise<any>((resolveStored, reject) => {
+        const open = indexedDB.open('screensDB', 1);
+        open.onerror = () => reject(open.error);
+        open.onsuccess = () => {
+          const db = open.result;
+          const read = db.transaction('screensDataStore').objectStore('screensDataStore').get('1');
+          read.onsuccess = () => { db.close(); resolveStored(read.result); };
+          read.onerror = () => { db.close(); reject(read.error); };
+        };
+      }));
+      expect(older.screensData).toBe('older recording must remain intact');
+      await client.reload();
+    }
     if (saveFailure === 'http' || saveFailure === 'logical') {
       await expect(client.getByText('Demo creation paused', { exact: true })).toBeVisible();
       await expect(client.getByRole('button', { name: 'Create Interactive Demo', exact: true })).toHaveCount(0);

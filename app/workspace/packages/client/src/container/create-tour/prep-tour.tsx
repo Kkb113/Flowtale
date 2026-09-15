@@ -63,7 +63,8 @@ export class PrepTour extends React.PureComponent<Props, State> {
     if (!this.active) return;
     this.active = false;
     this.stopWatching();
-    window.location.replace('/create-interactive-demo');
+    const capture = new URLSearchParams(window.location.search).get('capture');
+    window.location.replace(`/create-interactive-demo${capture ? `?capture=${encodeURIComponent(capture)}` : ''}`);
   };
 
   private readStatus = (): void => {

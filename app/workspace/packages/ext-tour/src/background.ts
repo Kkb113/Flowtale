@@ -44,7 +44,9 @@ const EXPECTED = "recording_expected/";
 const RECOVERY = "recording_recovery";
 const LAST_SCREENSHOT = "recording_last_screenshot_at";
 interface CaptureExpectation { tabId: number; frames: number[]; styles: Record<string, ThemeStats> }
-interface RecordingSession { id: string; stopping: boolean }
+interface RecordingSession { id: string; stopping: boolean; settleAfter?: number }
+const FRAME_SETTLE_MS = 5000;
+let finishTimer: ReturnType<typeof setTimeout> | undefined;
 // All active-recording mutations share one queue. A failed write releases it, and raw
 // data remains durable until the complete transfer payload has been retained.
 let recordingQueue: Promise<unknown> = Promise.resolve();
@@ -150,6 +152,10 @@ async function addFrameDataToProcessList(id: number, part: FrameDataToBeProcesse
   parts.push(part);
   if (style) expected.styles[part.frameId] = style;
   await chrome.storage.local.set({ [key]: parts, [EXPECTED + id]: expected });
+  const session: RecordingSession | undefined = (await chrome.storage.local.get(SESSION))[SESSION];
+  if (session?.stopping) {
+    await chrome.storage.local.set({ [SESSION]: { ...session, settleAfter: Date.now() + FRAME_SETTLE_MS } });
+  }
   await finishIfReady();
 }
 
@@ -179,12 +185,30 @@ async function finishIfReady(keepCompleteOnly = false): Promise<void> {
   const stored = await chrome.storage.local.get(null);
   const session: RecordingSession | undefined = stored[SESSION];
   if (!session?.stopping) return;
+  // Match the original recorder: allow embedded frames five quiet seconds to arrive,
+  // then submit usable screens. Browser frame inventories include removed widgets
+  // and frames that cannot run our recorder. Persist the deadline across worker restarts.
+  if (!session.settleAfter) {
+    session.settleAfter = Date.now() + FRAME_SETTLE_MS;
+    await chrome.storage.local.set({ [SESSION]: session });
+  }
+  const settled = Date.now() >= session.settleAfter;
+  if (finishTimer !== undefined) clearTimeout(finishTimer);
+  if (!settled) {
+    finishTimer = setTimeout(() => {
+      mutateRecording(() => finishIfReady()).catch(async () => {
+        await chrome.storage.local.set({ [RECOVERY]: {
+          message: "Recording could not be transferred. Saved screens are retained; retry opening your demo."
+        } }).catch(() => undefined);
+      });
+    }, session.settleAfter - Date.now());
+  }
   const order: string[] = stored[FRAMES_TO_PROCESS_ORDER] || [];
-  const complete = order.filter(key => recordingReadiness(stored[EXPECTED + key.split("/")[1]]?.frames, stored[key] || []).complete);
+  const complete = order.filter(key => recordingReadiness(stored[EXPECTED + key.split("/")[1]]?.frames, stored[key] || [], settled).complete);
   const incomplete = order.length - complete.length;
   await chrome.storage.local.set({ [RECOVERY]: { total: order.length,
     complete: complete.length,
-    message: incomplete ? `${incomplete} screen(s) are missing captured frames or a screenshot. Saved data is retained.`
+    message: !settled ? "" : incomplete ? "Some screens could not be captured. Your recording is saved in this browser."
       : (!complete.length ? "No complete screens were captured. You can discard this recording and try again." : "") } });
   if (!complete.length || (incomplete && !keepCompleteOnly)) return;
   const manifest = await retainCapture(
@@ -200,6 +224,7 @@ async function finishIfReady(keepCompleteOnly = false): Promise<void> {
 }
 
 async function clearActiveRecording(): Promise<void> {
+  if (finishTimer !== undefined) clearTimeout(finishTimer);
   const stored = await chrome.storage.local.get(null);
   const keys = Object.keys(stored).filter(key => key.startsWith(`${FRAMES_TO_PROCESS}/`) || key.startsWith(EXPECTED));
   await chrome.storage.local.remove([...keys, FRAMES_TO_PROCESS_ORDER, SCREEN_DATA_FINISHED, SCREEN_STYLE_DATA, SESSION, RECOVERY, FRAMES_IN_TAB]);
@@ -223,7 +248,8 @@ async function resetAppState(): Promise<void> {
 async function getPersistentExtState(): Promise<IExtStoredState> {
   const stored = await chrome.storage.local.get(null);
   const order: string[] = stored[FRAMES_TO_PROCESS_ORDER] || [];
-  const complete = order.filter(key => recordingReadiness(stored[EXPECTED + key.split("/")[1]]?.frames, stored[key] || []).complete).length;
+  const settled = !!stored[SESSION]?.settleAfter && Date.now() >= stored[SESSION].settleAfter;
+  const complete = order.filter(key => recordingReadiness(stored[EXPECTED + key.split("/")[1]]?.frames, stored[key] || [], settled).complete).length;
   const active = !!stored[SESSION] || !!order.length || !!stored[SCREEN_DATA_FINISHED]?.length;
   return { identity: stored[APP_STATE_IDENTITY] || null,
     recordingStatus: active ? stored[APP_RECORDING_STATE] || RecordingStatus.Stopping : RecordingStatus.Idle,
@@ -407,11 +433,13 @@ async function handleMessage(msg: MsgPayload<any>, sender: chrome.runtime.Messag
     case Msg.TAKE_SCREENSHOT: {
       const tMsg = msg as MsgPayload<ReqScreenshotData>;
       if (sender.frameId === 0 && sender.tab?.id) {
-        // Serialize screenshots as well as frame writes. A failed/quota-limited screenshot
-        // stays missing; an image from a different interaction must never be substituted.
+        // Serialize screenshots and avoid spending Chrome's quota twice on the same screen.
         await mutateRecording(async () => {
-          const expected = (await chrome.storage.local.get(EXPECTED + tMsg.data.id))[EXPECTED + tMsg.data.id];
+          const key = `${FRAMES_TO_PROCESS}/${tMsg.data.id}`;
+          const stored = await chrome.storage.local.get([EXPECTED + tMsg.data.id, key]);
+          const expected = stored[EXPECTED + tMsg.data.id];
           if (!expected || expected.tabId !== sender.tab!.id) return;
+          if (stored[key]?.some((part: FrameDataToBeProcessed) => part.type === "thumbnail")) return;
           const tab = await chrome.tabs.get(sender.tab!.id!);
           if (!tab.active || tab.windowId !== sender.tab!.windowId) throw new Error("The recorded tab is no longer visible");
           const data = await recordingScreenshot(tab.id!, tab.windowId);
@@ -787,5 +815,5 @@ chrome.tabs.onActivated.addListener(info => {
   mutateRecording(() => onTabActive(info)).catch(() => console.warn("Could not prepare the recording tab; saved frames are retained"));
 });
 
-// Resume an interrupted completion using durable expectations, without timeout-based acceptance.
+// Resume an interrupted completion using its saved data and embedded-frame deadline.
 mutateRecording(() => finishIfReady()).catch(() => console.warn("Recording recovery is available in the extension"));

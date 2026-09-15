@@ -1,6 +1,6 @@
 import { sleep } from "@fable/common/dist/utils";
 
-/** Retry a transient compositor readback once, never a permission or visibility failure. */
+/** Retry transient browser capture failures once, never a permission or visibility failure. */
 export async function recordingScreenshot(tabId: number, windowId: number): Promise<string> {
   const original = await chrome.tabs.get(tabId);
   const assertVisible = (tab: chrome.tabs.Tab): void => {
@@ -15,7 +15,9 @@ export async function recordingScreenshot(tabId: number, windowId: number): Prom
     try {
       data = await chrome.tabs.captureVisibleTab(windowId, { format: "png" });
     } catch (error) {
-      if (attempt !== 0 || !(error instanceof Error) || !error.message.includes("image readback failed")) throw error;
+      const transient = error instanceof Error && (error.message.includes("image readback failed")
+        || error.message.includes("MAX_CAPTURE_VISIBLE_TAB_CALLS_PER_SECOND"));
+      if (attempt !== 0 || !transient) throw error;
       // Failed calls can consume Chrome's screenshot quota as well.
       await sleep(1100);
       continue;

@@ -12,6 +12,7 @@ interface Props {
 
 interface AppState {
   ic?: string;
+  capture?: string;
 }
 
 export const enum LoginErrorType {
@@ -42,6 +43,8 @@ function RemoteLogIn(props: Props): JSX.Element {
 
     const inviteCode = searchParams.get('ic');
     if (inviteCode) appState.ic = inviteCode;
+    const capture = searchParams.get('capture');
+    if (capture) appState.capture = capture;
 
     const errorType = searchParams.get('t');
     if (!errorType) {

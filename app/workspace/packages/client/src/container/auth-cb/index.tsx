@@ -1,9 +1,9 @@
 import React from 'react';
 import { connect } from 'react-redux';
-import { openDb, DB_NAME, OBJECT_KEY, OBJECT_KEY_VALUE, OBJECT_STORE, DBData } from '@fable/common/dist/db-utils';
+import { openDb, DB_NAME, OBJECT_KEY, OBJECT_STORE } from '@fable/common/dist/db-utils';
+import { readCapture } from '@fable/common/dist/capture-storage';
 import { TState } from '../../reducer';
 import { withRouter, WithRouterProps } from '../../router-hoc';
-import { getDataFromDb } from '../create-tour/db-utils';
 import TopLoader from '../../component/loader/top-loader';
 import { TOP_LOADER_DURATION } from '../../constants';
 
@@ -23,8 +23,10 @@ type IProps = IOwnProps & IAppStateProps & IDispatchProps & WithRouterProps;
 interface IOwnStateProps {
 }
 
-class AuthCallback extends React.PureComponent<IProps, IOwnStateProps> {
+export class AuthCallback extends React.PureComponent<IProps, IOwnStateProps> {
   private db: IDBDatabase | null;
+
+  private active = false;
 
   constructor(props: IProps) {
     super(props);
@@ -32,14 +34,29 @@ class AuthCallback extends React.PureComponent<IProps, IOwnStateProps> {
   }
 
   componentDidMount(): void {
-    setTimeout(async () => {
+    this.active = true;
+    this.redirect();
+  }
+
+  componentWillUnmount(): void {
+    this.active = false;
+  }
+
+  private async redirect(): Promise<void> {
+    try {
       this.db = await openDb(DB_NAME, OBJECT_STORE, 1, OBJECT_KEY);
-      const dbData = await getDataFromDb(this.db, OBJECT_STORE, OBJECT_KEY_VALUE) as DBData;
-      if (dbData) {
-        this.props.navigate('/create-interactive-demo');
-      }
-      this.props.navigate('/demos');
-    }, 200);
+      if (!this.active) return;
+      const capture = new URLSearchParams(window.location.search).get('capture');
+      const dbData = await readCapture(this.db, capture);
+      if (!this.active) return;
+      const id = dbData?.captureSessionId;
+      this.props.navigate(dbData ? `/create-interactive-demo${id ? `?capture=${encodeURIComponent(id)}` : ''}` : '/demos');
+    } catch {
+      if (this.active) this.props.navigate('/demos');
+    } finally {
+      this.db?.close();
+      this.db = null;
+    }
   }
 
   render(): React.ReactNode {

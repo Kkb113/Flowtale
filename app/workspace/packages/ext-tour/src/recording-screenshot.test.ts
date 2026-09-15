@@ -33,6 +33,19 @@ it("does not retry permission failures", async () => {
   expect(sleep).not.toHaveBeenCalled();
 });
 
+it("retries Chrome's screenshot rate limit with a fresh capture", async () => {
+  captureVisibleTab.mockRejectedValueOnce(new Error("MAX_CAPTURE_VISIBLE_TAB_CALLS_PER_SECOND quota exceeded"));
+  await expect(recordingScreenshot(7, 2)).resolves.toBe("data:image/png;base64,AAAA");
+  expect(captureVisibleTab).toHaveBeenCalledTimes(2);
+  expect(sleep).toHaveBeenCalledWith(1100);
+});
+
+it("bounds retries when Chrome continues to reject screenshots", async () => {
+  captureVisibleTab.mockRejectedValue(new Error("MAX_CAPTURE_VISIBLE_TAB_CALLS_PER_SECOND quota exceeded"));
+  await expect(recordingScreenshot(7, 2)).rejects.toThrow("quota exceeded");
+  expect(captureVisibleTab).toHaveBeenCalledTimes(2);
+});
+
 it.each([{ active: false }, { url: "https://example.test/other" }, { pendingUrl: "https://example.test/other" }])("rejects a changed page before retry: %s", async change => {
   get.mockResolvedValueOnce(visible).mockResolvedValueOnce(visible).mockResolvedValue({ ...visible, ...change });
   captureVisibleTab.mockRejectedValueOnce(new Error("image readback failed"));

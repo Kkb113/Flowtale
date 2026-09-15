@@ -16,7 +16,7 @@ async function installHelpers(page: Page) {
   })();` });
 }
 
-test('two recording tabs cannot overwrite one another and the winning capture survives reload', async ({ page, context }) => {
+test('two recording tabs both save independently and survive reload', async ({ page, context }) => {
   const other = await context.newPage();
   await Promise.all([installHelpers(page), installHelpers(other)]);
   const commit = (tab: Page, session: string) => tab.evaluate(async id => {
@@ -29,18 +29,17 @@ test('two recording tabs cannot overwrite one another and the winning capture su
     } catch { return { id, committed: false }; } finally { db.close(); }
   }, session);
   const results = await Promise.all([commit(page, 'first-session'), commit(other, 'second-session')]);
-  expect(results.filter(result => result.committed)).toHaveLength(1);
-  const winning = results.find(result => result.committed)!.id;
+  expect(results.filter(result => result.committed)).toHaveLength(2);
   await page.reload();
   await installHelpers(page);
   const persisted = await page.evaluate(async () => {
     const storage = (window as any).captureStorage;
     const db = await storage.openDb(storage.DB_NAME, storage.OBJECT_STORE, 1, storage.OBJECT_KEY);
-    try { return await storage.runDbRequest(db, storage.OBJECT_STORE, 'readonly', (store: IDBObjectStore) => store.get('1')); }
+    try { return await Promise.all(['first-session', 'second-session'].map(id => storage.readCapture(db, id))); }
     finally { db.close(); }
   });
-  expect(persisted.captureSessionId).toBe(winning);
-  expect((await commit(page, winning)).committed).toBe(true);
+  expect(persisted.map((capture: any) => capture.captureSessionId)).toEqual(['first-session', 'second-session']);
+  expect((await commit(page, 'second-session')).committed).toBe(true);
 });
 
 test('a successful put followed by transaction abort is rejected and does not persist data', async ({ page }) => {
